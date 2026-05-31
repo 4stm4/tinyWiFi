@@ -4,6 +4,7 @@
 //! Project rule: always check service/file/interface availability *before*
 //! reading, restarting, or rendering data.
 
+pub mod config;
 pub mod file;
 pub mod hostapd;
 pub mod interface;
@@ -13,6 +14,7 @@ pub mod service;
 pub mod status;
 pub mod wifi;
 
+pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
 pub use nanodhcp::{update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
