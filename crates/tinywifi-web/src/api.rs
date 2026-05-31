@@ -103,6 +103,21 @@ pub async fn service_restart_handler(
     Ok(ok())
 }
 
+pub async fn reboot() -> Result<Json<Value>, ApiError> {
+    let out = std::process::Command::new("systemctl")
+        .arg("reboot")
+        .output()
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if out.status.success() {
+        Ok(ok())
+    } else {
+        Err(ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ))
+    }
+}
+
 fn wifi_error(e: WifiError) -> ApiError {
     let status = match e {
         WifiError::Validation(_) => StatusCode::BAD_REQUEST,

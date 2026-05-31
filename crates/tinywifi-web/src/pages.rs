@@ -3,9 +3,10 @@ use std::fmt::Display;
 use axum::extract::State;
 use axum::response::{Html, Redirect};
 
+use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::metrics::{self, Memory};
-use tinywifi_core::{interface_ipv4, HostapdConf, SystemStatus};
+use tinywifi_core::{interface_ipv4, service_status, HostapdConf, ServiceStatus, SystemStatus};
 
 use crate::state::AppState;
 
@@ -138,10 +139,64 @@ pub async fn leases() -> Html<String> {
     )
 }
 
-pub async fn system() -> Html<String> {
-    layout(
-        "System",
-        "<p>Restart services and reboot the device.</p>\
-         <p>API: <a href=\"/api/services\">GET /api/services</a></p>",
-    )
+const SYSTEM_SCRIPT: &str = "\
+<p id=\"result\" role=\"status\"></p>\n\
+<script>\n\
+async function act(url, btn, confirmMsg){\n\
+  if(confirmMsg && !confirm(confirmMsg)) return;\n\
+  const out = document.getElementById('result');\n\
+  btn.disabled = true; out.textContent = 'Working…';\n\
+  try {\n\
+    const r = await fetch(url, {method:'POST'});\n\
+    let j = {}; try { j = await r.json(); } catch(e) {}\n\
+    out.textContent = r.ok ? ('OK: ' + url) : ('Error ' + r.status + ': ' + (j.error||r.statusText));\n\
+    if(r.ok) setTimeout(function(){ location.reload(); }, 1000);\n\
+  } catch(e){ out.textContent = 'Request failed: ' + e; }\n\
+  btn.disabled = false;\n\
+}\n\
+</script>\n";
+
+pub async fn system(State(st): State<AppState>) -> Html<String> {
+    let s = &st.config.services;
+    let p = &st.config.paths;
+    let items: [(&str, &str, Option<&std::path::Path>); 4] = [
+        ("Wi-Fi (hostapd)", &s.hostapd, Some(p.hostapd_conf.as_path())),
+        ("DHCP (nanodhcp)", &s.nanodhcp, Some(p.nanodhcp_conf.as_path())),
+        ("Web UI", &s.web, None),
+        ("Display", &s.display, None),
+    ];
+
+    let mut body = String::from("<table>\n<tr><th>Service</th><th>Status</th><th></th></tr>\n");
+    for (label, unit, config) in items {
+        let status = service_status(unit);
+        let missing_config = config.map(|c| !file_exists(c)).unwrap_or(false);
+        let mut status_cell = format!("{status:?}");
+        if missing_config {
+            status_cell.push_str(" <em>(config missing)</em>");
+        }
+        let disabled = if status == ServiceStatus::Missing {
+            " disabled"
+        } else {
+            ""
+        };
+        let button = format!(
+            "<button onclick=\"act('/api/services/{}/restart', this)\"{}>Restart</button>",
+            escape(unit),
+            disabled
+        );
+        body.push_str(&format!(
+            "<tr><th>{}</th><td>{}</td><td>{}</td></tr>\n",
+            escape(label),
+            status_cell,
+            button
+        ));
+    }
+    body.push_str("</table>\n");
+    body.push_str(
+        "<h2>Device</h2>\n\
+         <button onclick=\"act('/api/system/reboot', this, 'Reboot the device?')\">Reboot</button>\n",
+    );
+    body.push_str(SYSTEM_SCRIPT);
+
+    layout("System", &body)
 }

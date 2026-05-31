@@ -39,6 +39,7 @@ fn build_router(state: AppState) -> Router {
             "/api/services/:name/restart",
             post(api::service_restart_handler),
         )
+        .route("/api/system/reboot", post(api::reboot))
         .with_state(state)
 }
 
