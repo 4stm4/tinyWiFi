@@ -13,7 +13,7 @@ pub mod status;
 pub mod wifi;
 
 pub use hostapd::{HostapdConf, WifiConfig};
-pub use nanodhcp::{DhcpConfig, DhcpError};
+pub use nanodhcp::{update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
 pub use service::{
     service_exists, service_reload_or_restart, service_restart, service_running, service_start,
     service_status, service_stop, ServiceError, ServiceStatus,
