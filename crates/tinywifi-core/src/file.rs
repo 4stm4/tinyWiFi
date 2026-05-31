@@ -1,12 +1,34 @@
 //! Filesystem availability checks. Always run these before reading or
 //! writing a config so callers can degrade gracefully instead of panicking.
 
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// True if the path exists and is a regular file.
 pub fn file_exists(path: impl AsRef<Path>) -> bool {
     path.as_ref().is_file()
+}
+
+/// The `.bak` sibling path used for backups (e.g. `foo.conf` -> `foo.conf.bak`).
+pub fn backup_path(path: impl AsRef<Path>) -> PathBuf {
+    let mut name = OsString::from(path.as_ref().as_os_str());
+    name.push(".bak");
+    PathBuf::from(name)
+}
+
+/// Copy `path` to its `.bak` sibling. Returns the backup path.
+pub fn backup(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let bak = backup_path(&path);
+    fs::copy(&path, &bak)?;
+    Ok(bak)
+}
+
+/// Restore `path` from its `.bak` sibling.
+pub fn restore_backup(path: impl AsRef<Path>) -> std::io::Result<()> {
+    let bak = backup_path(&path);
+    fs::copy(&bak, &path)?;
+    Ok(())
 }
 
 /// True if the file can be opened for reading right now.
@@ -54,6 +76,22 @@ mod tests {
         assert!(!file_exists(&p));
         assert!(!file_readable(&p));
         assert!(!file_writable(&p));
+    }
+
+    #[test]
+    fn backup_and_restore_round_trip() {
+        let p = tmp_path("bak");
+        fs::write(&p, "original").unwrap();
+        let bak = backup(&p).unwrap();
+        assert_eq!(bak, backup_path(&p));
+        assert!(file_exists(&bak));
+
+        fs::write(&p, "changed").unwrap();
+        restore_backup(&p).unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), "original");
+
+        fs::remove_file(&p).ok();
+        fs::remove_file(&bak).ok();
     }
 
     #[cfg(unix)]

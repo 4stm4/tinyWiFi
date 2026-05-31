@@ -129,6 +129,11 @@ pub fn service_start(name: &str) -> Result<(), ServiceError> {
     run_action("start", name)
 }
 
+/// `systemctl stop` the unit (checks existence first).
+pub fn service_stop(name: &str) -> Result<(), ServiceError> {
+    run_action("stop", name)
+}
+
 /// `systemctl restart` the unit (checks existence first).
 pub fn service_restart(name: &str) -> Result<(), ServiceError> {
     run_action("restart", name)
