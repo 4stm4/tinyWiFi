@@ -7,12 +7,14 @@
 pub mod file;
 pub mod hostapd;
 pub mod interface;
+pub mod leases;
 pub mod nanodhcp;
 pub mod service;
 pub mod status;
 pub mod wifi;
 
 pub use hostapd::{HostapdConf, WifiConfig};
+pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
 pub use nanodhcp::{update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
 pub use service::{
     service_exists, service_reload_or_restart, service_restart, service_running, service_start,
