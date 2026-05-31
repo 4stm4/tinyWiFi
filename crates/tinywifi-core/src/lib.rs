@@ -11,6 +11,7 @@ pub mod interface;
 pub mod leases;
 pub mod metrics;
 pub mod nanodhcp;
+pub mod safety;
 pub mod service;
 pub mod status;
 pub mod wifi;
@@ -20,13 +21,14 @@ pub use hostapd::{HostapdConf, WifiConfig};
 pub use interface::{has_default_route, interface_exists, interface_has_ip, interface_ipv4};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
 pub use metrics::{load_average, memory, uptime_secs, Memory};
-pub use nanodhcp::{update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
+pub use nanodhcp::{stage_dhcp, update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
+pub use safety::{discard_backup, revert, wait_until_running, AutoRevert};
 pub use service::{
     service_exists, service_reload_or_restart, service_restart, service_running, service_start,
     service_status, service_stop, ServiceError, ServiceStatus,
 };
 pub use status::{InterfaceStatus, LeasesStatus, SystemStatus};
-pub use wifi::{update_wifi, WifiError, WifiSettings};
+pub use wifi::{stage_wifi, update_wifi, WifiError, WifiSettings};
 
 /// Crate version, surfaced in the dashboard and on the display.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

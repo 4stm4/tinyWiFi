@@ -32,7 +32,9 @@ fn build_router(state: AppState) -> Router {
         .route("/system", get(pages::system))
         .route("/api/status", get(api::status))
         .route("/api/wifi", get(api::wifi_get).post(api::wifi_post))
+        .route("/api/wifi/confirm", post(api::wifi_confirm))
         .route("/api/dhcp", get(api::dhcp_get).post(api::dhcp_post))
+        .route("/api/dhcp/confirm", post(api::dhcp_confirm))
         .route("/api/leases", get(api::leases))
         .route("/api/services", get(api::services))
         .route(

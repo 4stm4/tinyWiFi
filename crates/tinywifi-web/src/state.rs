@@ -1,17 +1,25 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-use tinywifi_core::{HostapdConf, TinywifiConfig};
+use tinywifi_core::{AutoRevert, HostapdConf, TinywifiConfig};
+
+/// Armed auto-reverts awaiting confirmation, keyed by area (`"wifi"`,
+/// `"dhcp"`). Arming a new change for a key replaces (and cancels) the
+/// previous pending one.
+pub type PendingReverts = Arc<Mutex<HashMap<&'static str, AutoRevert>>>;
 
 /// Shared, cheaply-cloneable application state.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<TinywifiConfig>,
+    pub pending: PendingReverts,
 }
 
 impl AppState {
     pub fn new(config: TinywifiConfig) -> Self {
         AppState {
             config: Arc::new(config),
+            pending: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

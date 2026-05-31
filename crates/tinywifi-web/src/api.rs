@@ -1,15 +1,32 @@
-use axum::extract::{Path, State};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use tinywifi_core::{
-    leases::LeasesReport, service_restart, service_status, update_dhcp, update_wifi, DhcpConfig,
-    DhcpSettings, DhcpUpdateError, HostapdConf, SystemStatus, WifiConfig, WifiError, WifiSettings,
+    discard_backup, leases::LeasesReport, revert, service_restart, service_status, stage_dhcp,
+    stage_wifi, update_dhcp, update_wifi, AutoRevert, DhcpConfig, DhcpSettings, DhcpUpdateError,
+    HostapdConf, SystemStatus, WifiConfig, WifiError, WifiSettings,
 };
 
 use crate::state::AppState;
+
+/// Bounds on the confirm window: long enough to reconnect to a new Wi-Fi,
+/// short enough that a lockout self-heals quickly.
+const MIN_HOLD_SECS: u64 = 5;
+const MAX_HOLD_SECS: u64 = 600;
+
+/// Optional `?hold=<secs>` on an update: apply the change but auto-revert it
+/// after `secs` unless a matching `/confirm` arrives first.
+#[derive(Deserialize)]
+pub struct HoldParams {
+    pub hold: Option<u64>,
+}
 
 /// A JSON error response with an HTTP status.
 pub struct ApiError {
@@ -38,6 +55,36 @@ fn ok() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
+fn pending(secs: u64) -> Json<Value> {
+    Json(json!({ "status": "pending", "confirm_within": secs }))
+}
+
+/// Arm (or replace) the auto-revert for `key`. After `secs` the staged config
+/// is restored and the service restarted, unless `/confirm` cancels it first.
+fn arm_revert(st: &AppState, key: &'static str, path: PathBuf, service: String, secs: u64) {
+    let guard = AutoRevert::arm(Duration::from_secs(secs), move || {
+        revert(&path, &service);
+        discard_backup(&path);
+    });
+    // Dropping any previous guard for this key cancels its timer.
+    st.pending.lock().unwrap().insert(key, guard);
+}
+
+/// Confirm a staged change: cancel the timer and discard the retained backup.
+/// Reports whether a pending change existed and whether it was confirmed in
+/// time or had already auto-reverted.
+fn confirm_pending(st: &AppState, key: &'static str, path: &std::path::Path) -> Json<Value> {
+    let guard = st.pending.lock().unwrap().remove(key);
+    match guard {
+        Some(g) if g.confirm() => {
+            discard_backup(path);
+            Json(json!({ "status": "confirmed" }))
+        }
+        Some(_) => Json(json!({ "status": "already_reverted" })),
+        None => Json(json!({ "status": "no_pending" })),
+    }
+}
+
 pub async fn status(State(st): State<AppState>) -> Json<SystemStatus> {
     Json(SystemStatus::collect(
         &st.ap_interface(),
@@ -53,10 +100,26 @@ pub async fn wifi_get(State(st): State<AppState>) -> ApiResult<WifiConfig> {
 
 pub async fn wifi_post(
     State(st): State<AppState>,
+    Query(q): Query<HoldParams>,
     Json(settings): Json<WifiSettings>,
 ) -> Result<Json<Value>, ApiError> {
-    update_wifi(&st.config.paths.hostapd_conf, &settings).map_err(wifi_error)?;
-    Ok(ok())
+    let path = st.config.paths.hostapd_conf.clone();
+    match q.hold {
+        Some(secs) => {
+            stage_wifi(&path, &settings).map_err(wifi_error)?;
+            let secs = secs.clamp(MIN_HOLD_SECS, MAX_HOLD_SECS);
+            arm_revert(&st, "wifi", path, st.config.services.hostapd.clone(), secs);
+            Ok(pending(secs))
+        }
+        None => {
+            update_wifi(&path, &settings).map_err(wifi_error)?;
+            Ok(ok())
+        }
+    }
+}
+
+pub async fn wifi_confirm(State(st): State<AppState>) -> Json<Value> {
+    confirm_pending(&st, "wifi", &st.config.paths.hostapd_conf)
 }
 
 pub async fn dhcp_get(State(st): State<AppState>) -> ApiResult<DhcpConfig> {
@@ -67,10 +130,26 @@ pub async fn dhcp_get(State(st): State<AppState>) -> ApiResult<DhcpConfig> {
 
 pub async fn dhcp_post(
     State(st): State<AppState>,
+    Query(q): Query<HoldParams>,
     Json(settings): Json<DhcpSettings>,
 ) -> Result<Json<Value>, ApiError> {
-    update_dhcp(&st.config.paths.nanodhcp_conf, &settings).map_err(dhcp_error)?;
-    Ok(ok())
+    let path = st.config.paths.nanodhcp_conf.clone();
+    match q.hold {
+        Some(secs) => {
+            stage_dhcp(&path, &settings).map_err(dhcp_error)?;
+            let secs = secs.clamp(MIN_HOLD_SECS, MAX_HOLD_SECS);
+            arm_revert(&st, "dhcp", path, st.config.services.nanodhcp.clone(), secs);
+            Ok(pending(secs))
+        }
+        None => {
+            update_dhcp(&path, &settings).map_err(dhcp_error)?;
+            Ok(ok())
+        }
+    }
+}
+
+pub async fn dhcp_confirm(State(st): State<AppState>) -> Json<Value> {
+    confirm_pending(&st, "dhcp", &st.config.paths.nanodhcp_conf)
 }
 
 pub async fn leases(State(st): State<AppState>) -> Json<LeasesReport> {

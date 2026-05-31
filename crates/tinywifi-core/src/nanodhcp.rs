@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::file::{backup, file_exists, file_readable, file_writable, restore_backup};
-use crate::service::{service_restart, service_running, ServiceError};
+use crate::file::{backup, file_exists, file_readable, file_writable};
+use crate::safety::{discard_backup, revert, wait_until_running};
+use crate::service::{service_restart, ServiceError};
 
 /// The systemd unit that serves DHCP.
 const NANODHCP_SERVICE: &str = "nanodhcp";
@@ -173,19 +174,38 @@ impl fmt::Display for DhcpUpdateError {
 
 impl std::error::Error for DhcpUpdateError {}
 
-/// Apply new DHCP settings to `path` and restart nanodhcp.
+/// Apply new DHCP settings to `path` and restart nanodhcp, committing the
+/// change once the service comes up (the `.bak` is discarded).
 ///
 /// Sequence: load the current config (which checks it exists and is
 /// readable), merge the edits, validate, confirm the file is writable, back
 /// it up, write the new TOML, restart nanodhcp and verify it is running. If
 /// the restart fails or the service does not come up, the backup is restored
 /// and nanodhcp restarted on the old config before returning an error.
-pub fn update_dhcp(
-    path: impl AsRef<Path>,
-    settings: &DhcpSettings,
-) -> Result<(), DhcpUpdateError> {
-    let path = path.as_ref();
+pub fn update_dhcp(path: impl AsRef<Path>, settings: &DhcpSettings) -> Result<(), DhcpUpdateError> {
+    apply_dhcp(path.as_ref(), settings, Commit::Now)
+}
 
+/// Like [`update_dhcp`], but keeps the `.bak` after a successful restart so the
+/// caller can still revert. Used by the web UI's confirm-or-auto-revert flow.
+/// The caller must eventually commit ([`discard_backup`]) or revert
+/// ([`revert`]).
+pub fn stage_dhcp(path: impl AsRef<Path>, settings: &DhcpSettings) -> Result<(), DhcpUpdateError> {
+    apply_dhcp(path.as_ref(), settings, Commit::Hold)
+}
+
+/// Whether to discard the backup after the service comes up cleanly.
+#[derive(Clone, Copy)]
+enum Commit {
+    Now,
+    Hold,
+}
+
+fn apply_dhcp(
+    path: &Path,
+    settings: &DhcpSettings,
+    commit: Commit,
+) -> Result<(), DhcpUpdateError> {
     let mut config = DhcpConfig::from_path(path).map_err(DhcpUpdateError::Load)?;
     config.apply(settings);
     config.validate().map_err(DhcpUpdateError::Validation)?;
@@ -199,21 +219,21 @@ pub fn update_dhcp(
     std::fs::write(path, toml).map_err(DhcpUpdateError::Io)?;
 
     match service_restart(NANODHCP_SERVICE) {
-        Ok(()) if service_running(NANODHCP_SERVICE) => Ok(()),
+        Ok(()) if wait_until_running(NANODHCP_SERVICE) => {
+            if let Commit::Now = commit {
+                discard_backup(path);
+            }
+            Ok(())
+        }
         Ok(()) => {
-            rollback(path);
+            revert(path, NANODHCP_SERVICE);
             Err(DhcpUpdateError::RolledBack)
         }
         Err(e) => {
-            rollback(path);
+            revert(path, NANODHCP_SERVICE);
             Err(DhcpUpdateError::Service(e))
         }
     }
-}
-
-fn rollback(path: &Path) {
-    let _ = restore_backup(path);
-    let _ = service_restart(NANODHCP_SERVICE);
 }
 
 #[cfg(test)]

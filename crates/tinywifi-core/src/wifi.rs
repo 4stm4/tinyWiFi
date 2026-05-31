@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::file::{backup, file_exists, file_writable, restore_backup};
+use crate::file::{backup, file_exists, file_writable};
 use crate::hostapd::HostapdConf;
 use crate::interface::interface_exists;
-use crate::service::{service_restart, service_running, ServiceError};
+use crate::safety::{discard_backup, revert, wait_until_running};
+use crate::service::{service_restart, ServiceError};
 
 /// The systemd unit that serves the access point.
 const HOSTAPD_SERVICE: &str = "hostapd";
@@ -104,7 +105,8 @@ impl WifiSettings {
     }
 }
 
-/// Apply new Wi-Fi settings to `path` and restart hostapd.
+/// Apply new Wi-Fi settings to `path` and restart hostapd, committing the
+/// change once the service comes up (the `.bak` is discarded).
 ///
 /// Sequence: confirm the file exists and is writable, validate the settings,
 /// confirm the AP interface exists, back up the file, write the changes, then
@@ -112,8 +114,26 @@ impl WifiSettings {
 /// service does not come up, the backup is restored and hostapd restarted on
 /// the old config before returning an error.
 pub fn update_wifi(path: impl AsRef<Path>, settings: &WifiSettings) -> Result<(), WifiError> {
-    let path = path.as_ref();
+    apply_wifi(path.as_ref(), settings, Commit::Now)
+}
 
+/// Like [`update_wifi`], but keeps the `.bak` after a successful restart so the
+/// caller can still revert. Used by the web UI's confirm-or-auto-revert flow,
+/// where a change that cuts the admin's own Wi-Fi link must be undoable until
+/// they reconnect and confirm it. The caller is responsible for eventually
+/// committing ([`discard_backup`]) or reverting ([`revert`]).
+pub fn stage_wifi(path: impl AsRef<Path>, settings: &WifiSettings) -> Result<(), WifiError> {
+    apply_wifi(path.as_ref(), settings, Commit::Hold)
+}
+
+/// Whether to discard the backup after the service comes up cleanly.
+#[derive(Clone, Copy)]
+enum Commit {
+    Now,
+    Hold,
+}
+
+fn apply_wifi(path: &Path, settings: &WifiSettings, commit: Commit) -> Result<(), WifiError> {
     if !file_exists(path) {
         return Err(WifiError::NotFound(path.to_path_buf()));
     }
@@ -134,21 +154,21 @@ pub fn update_wifi(path: impl AsRef<Path>, settings: &WifiSettings) -> Result<()
     std::fs::write(path, conf.to_string()).map_err(WifiError::Io)?;
 
     match service_restart(HOSTAPD_SERVICE) {
-        Ok(()) if service_running(HOSTAPD_SERVICE) => Ok(()),
+        Ok(()) if wait_until_running(HOSTAPD_SERVICE) => {
+            if let Commit::Now = commit {
+                discard_backup(path);
+            }
+            Ok(())
+        }
         Ok(()) => {
-            rollback(path);
+            revert(path, HOSTAPD_SERVICE);
             Err(WifiError::RolledBack)
         }
         Err(e) => {
-            rollback(path);
+            revert(path, HOSTAPD_SERVICE);
             Err(WifiError::Service(e))
         }
     }
-}
-
-fn rollback(path: &Path) {
-    let _ = restore_backup(path);
-    let _ = service_restart(HOSTAPD_SERVICE);
 }
 
 #[cfg(test)]
