@@ -5,10 +5,12 @@
 //! reading, restarting, or rendering data.
 
 pub mod file;
+pub mod hostapd;
 pub mod interface;
 pub mod service;
 pub mod status;
 
+pub use hostapd::{HostapdConf, WifiConfig};
 pub use service::{
     service_exists, service_reload_or_restart, service_restart, service_running, service_start,
     service_status, ServiceError, ServiceStatus,
