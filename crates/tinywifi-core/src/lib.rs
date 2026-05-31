@@ -17,7 +17,7 @@ pub mod wifi;
 
 pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};
-pub use interface::{interface_exists, interface_has_ip, interface_ipv4};
+pub use interface::{has_default_route, interface_exists, interface_has_ip, interface_ipv4};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
 pub use metrics::{load_average, memory, uptime_secs, Memory};
 pub use nanodhcp::{update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};

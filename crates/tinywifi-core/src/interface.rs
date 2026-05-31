@@ -27,6 +27,14 @@ pub fn interface_ipv4(name: &str) -> Option<Ipv4Addr> {
     parse_ipv4(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// True if the host has a default route (a usable WAN/uplink).
+pub fn has_default_route() -> bool {
+    match Command::new("ip").args(["route", "show", "default"]).output() {
+        Ok(out) => !out.stdout.trim_ascii().is_empty(),
+        Err(_) => false,
+    }
+}
+
 /// Extract the address from `ip -o -4 addr show` output (the token after `inet`,
 /// with its CIDR suffix stripped).
 fn parse_ipv4(output: &str) -> Option<Ipv4Addr> {
