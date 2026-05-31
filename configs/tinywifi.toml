@@ -1,0 +1,20 @@
+# TinyWifi main configuration.
+# Paths point at the on-device (rootfs) locations; the repo copies under
+# configs/ are the source of truth that gets installed into the image.
+
+[web]
+listen = "0.0.0.0:8080"
+
+[display]
+refresh_secs = 10
+
+[paths]
+hostapd_conf = "/etc/hostapd/hostapd.conf"
+nanodhcp_conf = "/etc/nanodhcp/config.toml"
+leases_file = "/var/lib/nanodhcp/leases.json"
+
+[services]
+hostapd = "hostapd"
+nanodhcp = "nanodhcp"
+web = "tinywifi-web"
+display = "tinywifi-display"
