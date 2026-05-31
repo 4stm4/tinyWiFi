@@ -9,6 +9,7 @@ pub mod file;
 pub mod hostapd;
 pub mod interface;
 pub mod leases;
+pub mod metrics;
 pub mod nanodhcp;
 pub mod service;
 pub mod status;
@@ -16,7 +17,9 @@ pub mod wifi;
 
 pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};
+pub use interface::{interface_exists, interface_has_ip, interface_ipv4};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
+pub use metrics::{load_average, memory, uptime_secs, Memory};
 pub use nanodhcp::{update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
 pub use service::{
     service_exists, service_reload_or_restart, service_restart, service_running, service_start,

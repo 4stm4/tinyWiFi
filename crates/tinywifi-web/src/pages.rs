@@ -1,7 +1,11 @@
+use std::fmt::Display;
+
 use axum::extract::State;
 use axum::response::{Html, Redirect};
 
-use tinywifi_core::SystemStatus;
+use tinywifi_core::leases::{LeaseStatus, LeasesReport};
+use tinywifi_core::metrics::{self, Memory};
+use tinywifi_core::{interface_ipv4, HostapdConf, SystemStatus};
 
 use crate::state::AppState;
 
@@ -45,23 +49,68 @@ pub async fn index() -> Redirect {
     Redirect::to("/dashboard")
 }
 
+fn opt<T: Display>(value: Option<T>) -> String {
+    value.map(|v| v.to_string()).unwrap_or_else(|| "—".to_string())
+}
+
+fn fmt_uptime(secs: u64) -> String {
+    let (d, h, m) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+    if d > 0 {
+        format!("{d}d {h}h {m}m")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{m}m")
+    }
+}
+
+fn fmt_memory(m: Memory) -> String {
+    format!(
+        "{} / {} MB ({}%)",
+        m.used_kb() / 1024,
+        m.total_kb / 1024,
+        m.used_percent()
+    )
+}
+
+fn fmt_load(l: [f64; 3]) -> String {
+    format!("{:.2} {:.2} {:.2}", l[0], l[1], l[2])
+}
+
+fn row(label: &str, value: &str) -> String {
+    format!("<tr><th>{}</th><td>{}</td></tr>\n", escape(label), value)
+}
+
 pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
     let iface = st.ap_interface();
     let status = SystemStatus::collect(&iface, &st.config.paths.leases_file);
-    let body = format!(
-        "<table>\n\
-         <tr><th>Wi-Fi (hostapd)</th><td>{:?}</td></tr>\n\
-         <tr><th>DHCP (nanodhcp)</th><td>{:?}</td></tr>\n\
-         <tr><th>Leases</th><td>{:?}</td></tr>\n\
-         <tr><th>{}</th><td>{:?}</td></tr>\n\
-         </table>\n\
-         <p><a href=\"/api/status\">/api/status</a></p>",
-        status.hostapd,
-        status.nanodhcp,
-        status.leases,
-        escape(&iface),
-        status.wlan0,
-    );
+    let ssid = HostapdConf::from_path(&st.config.paths.hostapd_conf)
+        .ok()
+        .and_then(|c| c.wifi_config().ssid);
+    let ip = interface_ipv4(&iface);
+    let report = LeasesReport::read(&st.config.paths.leases_file);
+    let clients = report
+        .leases
+        .iter()
+        .filter(|l| l.status == LeaseStatus::Active)
+        .count();
+
+    let mut body = String::from("<table>\n");
+    body.push_str(&row("Wi-Fi (hostapd)", &format!("{:?}", status.hostapd)));
+    body.push_str(&row("SSID", &escape(&opt(ssid))));
+    body.push_str(&row(
+        &format!("{iface} IP"),
+        &escape(&opt(ip.map(|a| a.to_string()))),
+    ));
+    body.push_str(&row(&iface, &format!("{:?}", status.wlan0)));
+    body.push_str(&row("DHCP (nanodhcp)", &format!("{:?}", status.nanodhcp)));
+    body.push_str(&row("Clients", &clients.to_string()));
+    body.push_str(&row("Leases", &format!("{:?}", report.state)));
+    body.push_str(&row("Uptime", &opt(metrics::uptime_secs().map(fmt_uptime))));
+    body.push_str(&row("RAM", &opt(metrics::memory().map(fmt_memory))));
+    body.push_str(&row("Load", &opt(metrics::load_average().map(fmt_load))));
+    body.push_str("</table>\n<p><a href=\"/api/status\">/api/status</a></p>");
+
     layout("Dashboard", &body)
 }
 
