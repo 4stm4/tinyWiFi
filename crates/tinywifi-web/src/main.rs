@@ -2,6 +2,9 @@ mod api;
 mod pages;
 mod state;
 
+#[cfg(test)]
+mod tests;
+
 use std::process::ExitCode;
 
 use axum::routing::{get, post};
