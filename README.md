@@ -1,38 +1,38 @@
 # TinyWifi
 
-Управление точкой доступа Wi-Fi на Raspberry Pi / встраиваемом Linux:
-веб-панель и фоновый дисплей-демон поверх `hostapd` и `nanodhcp`.
+Management for a Wi-Fi access point on a Raspberry Pi / embedded Linux:
+a web panel and a background display daemon on top of `hostapd` and `nanodhcp`.
 
-Главное правило проекта: **всегда проверять доступность сервиса/файла/
-интерфейса перед чтением, перезапуском или рендером** — никаких паник на
-отсутствующих конфигах или сервисах, всё деградирует мягко.
+Core project rule: **always check that a service/file/interface is available
+before reading, restarting, or rendering** — never panic on a missing config or
+service; everything degrades gracefully.
 
-## Структура
+## Layout
 
-Cargo-воркспейс из трёх крейтов:
+A Cargo workspace of three crates:
 
-| Крейт | Назначение |
+| Crate | Purpose |
 |---|---|
-| `tinywifi-core` | Общая логика: проверки файлов/сервисов/интерфейсов, парсеры конфигов (hostapd, nanodhcp), лизы, метрики, модель статуса, безопасные правки с откатом. |
-| `tinywifi-web` | HTTP-панель на axum: дашборд, страницы Wi-Fi/DHCP/Leases/System и REST API. |
-| `tinywifi-display` | Демон, рисующий статус устройства (консоль сейчас, драйвер экрана позже через трейт `Renderer`). |
+| `tinywifi-core` | Shared logic: file/service/interface checks, config parsers (hostapd, nanodhcp), leases, host metrics, the status model, and safe edits with rollback. |
+| `tinywifi-web` | axum HTTP panel: dashboard, Wi-Fi/DHCP/Leases/System pages, and the REST API. |
+| `tinywifi-display` | Daemon that draws device status (console for now, a real screen driver later via the `Renderer` trait). |
 
-## Сборка
+## Build
 
 ```bash
 cargo build --release
 ```
 
-Бинари: `target/release/tinywifi-web`, `target/release/tinywifi-display`.
+Binaries: `target/release/tinywifi-web`, `target/release/tinywifi-display`.
 
-На встраиваемом устройстве (Buildroot/glibc, aarch64) бинарь, собранный на
-системе с более старым glibc, запускается forward-совместимо.
+On an embedded target (Buildroot/glibc, aarch64) a binary built on a host with
+an older glibc runs forward-compatibly.
 
-## Конфигурация
+## Configuration
 
-`tinywifi-web` и `tinywifi-display` читают TOML-конфиг приложения. Путь:
-`$TINYWIFI_CONFIG`, иначе `/etc/tinywifi/tinywifi.toml`, иначе локальный
-`configs/tinywifi.toml`.
+`tinywifi-web` and `tinywifi-display` read a TOML application config. Path
+resolution: `$TINYWIFI_CONFIG`, then `/etc/tinywifi/tinywifi.toml`, then the
+in-repo `configs/tinywifi.toml`.
 
 ```toml
 [web]
@@ -53,46 +53,49 @@ web      = "tinywifi-web"
 display  = "tinywifi-display"
 ```
 
-Форматы целевых файлов:
-- `hostapd.conf` — стандартный `key=value`, правки построчные (комментарии и
-  неизвестные директивы переживают round-trip).
-- `nanodhcp.conf` — `key=value` (`pool_start`/`pool_end`/`router`/`lease_file`
-  и т.д.); неизвестные ключи сохраняются при записи.
+Target file formats:
+- `hostapd.conf` — standard `key=value`; edits are line-preserving (comments and
+  unknown directives survive a round-trip).
+- `nanodhcp.conf` — `key=value` (`pool_start`/`pool_end`/`router`/`lease_file`,
+  etc.); unknown keys are preserved on write.
 
 ## REST API
 
-| Метод | Путь | Описание |
+| Method | Path | Description |
 |---|---|---|
-| GET | `/api/status` | Статус hostapd/nanodhcp/лизов/интерфейса |
-| GET/POST | `/api/wifi` | Чтение/правка SSID, пароля, страны, канала |
-| POST | `/api/wifi/confirm` | Подтвердить отложенную правку Wi-Fi |
-| GET/POST | `/api/dhcp` | Чтение/правка пула, шлюза, DNS, времени аренды |
-| POST | `/api/dhcp/confirm` | Подтвердить отложенную правку DHCP |
-| GET | `/api/leases` | Активные DHCP-клиенты |
-| GET | `/api/services` | Статусы сервисов |
-| POST | `/api/services/:name/restart` | Перезапуск сервиса |
-| POST | `/api/system/reboot` | Перезагрузка устройства |
+| GET | `/api/status` | Status of hostapd/nanodhcp/leases/interface |
+| GET/POST | `/api/wifi` | Read/edit SSID, password, country, channel |
+| POST | `/api/wifi/confirm` | Confirm a pending Wi-Fi edit |
+| GET/POST | `/api/dhcp` | Read/edit the pool, gateway, DNS, lease time |
+| POST | `/api/dhcp/confirm` | Confirm a pending DHCP edit |
+| GET | `/api/leases` | Active DHCP clients |
+| GET | `/api/services` | Service statuses |
+| POST | `/api/services/:name/restart` | Restart a service |
+| POST | `/api/system/reboot` | Reboot the device |
 
-### Безопасные правки (commit-confirm)
+### Safe edits (commit-confirm)
 
-`POST /api/wifi?hold=<секунды>` (и аналогично `/api/dhcp`) применяет
-изменение и ставит **автооткат**: если за `hold` секунд не пришёл
-`POST /api/wifi/confirm`, конфиг восстанавливается из `.bak` и сервис
-перезапускается на старых настройках. Это защищает от потери доступа, когда
-смена SSID/пароля рвёт собственный линк администратора.
+`POST /api/wifi?hold=<seconds>` (and likewise `/api/dhcp`) applies the change
+and arms an **auto-revert**: if no `POST /api/wifi/confirm` arrives within
+`hold` seconds, the config is restored from its `.bak` and the service is
+restarted on the old settings. This protects against locking yourself out when
+changing the SSID/password severs the very link you administer over.
 
-При обычном `POST` (без `hold`) изменение фиксируется сразу после успешного
-подъёма сервиса; при сбое запуска — немедленный откат.
+A plain `POST` (no `hold`) commits as soon as the service comes back up; on a
+failed restart it rolls back immediately.
 
-## Init-системы
+## Init systems
 
-Сервис-слой определяет менеджер один раз и работает поверх:
+The service layer detects the manager once and works on top of:
 - **systemd** (`systemctl`);
-- **SysV-init** (`/etc/init.d/Sxx`, Buildroot/busybox) — статус через скан
-  `/proc`, lifecycle через init-скрипты;
-- иначе статус по процессам, lifecycle недоступен.
+- **SysV-init** (`/etc/init.d/Sxx`, Buildroot/busybox) — status via a `/proc`
+  scan, lifecycle via init scripts;
+- otherwise status by process scan, with lifecycle unavailable.
 
-## Тесты
+For embedded deployment helpers (per-service init scripts, an example config),
+see [`deploy/`](deploy/).
+
+## Tests
 
 ```bash
 cargo test --workspace
