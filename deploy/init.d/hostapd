@@ -1,0 +1,32 @@
+#!/bin/sh
+# /etc/init.d/hostapd — per-service control for the TinyWifi panel.
+#
+# The netOS boot brings the AP up via S10tinywifi; this dedicated script lets
+# the web panel restart hostapd on its own (e.g. after a Wi-Fi settings change).
+# It has no S## prefix, so busybox init does not run it at boot. The TinyWifi
+# service layer prefers this exact-named script over the S10* boot stub.
+PIDFILE=/run/hostapd.pid
+CONF=/etc/hostapd/hostapd.conf
+
+case "$1" in
+  start)
+    hostapd -B "$CONF" -P "$PIDFILE"
+    ip addr add 192.168.44.1/24 dev wlan0 2>/dev/null || true
+    ;;
+  stop)
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    rm -f "$PIDFILE"
+    ;;
+  restart|reload)
+    "$0" stop
+    sleep 1
+    "$0" start
+    ;;
+  status)
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null && echo running || echo stopped
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

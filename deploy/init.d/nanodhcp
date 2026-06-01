@@ -1,0 +1,34 @@
+#!/bin/sh
+# /etc/init.d/nanodhcp — per-service control for the TinyWifi panel.
+#
+# Lets the web panel restart nanodhcp after a DHCP settings change. No S##
+# prefix, so busybox init does not run it at boot (S10tinywifi already starts
+# nanodhcp). The TinyWifi service layer prefers this exact-named script over
+# the S10nanodhcp boot stub.
+PIDFILE=/run/nanodhcp.pid
+CONF=/etc/nanodhcp/nanodhcp.conf
+
+case "$1" in
+  start)
+    mkdir -p /var/lib/nanodhcp
+    start-stop-daemon --start --quiet --background \
+      --pidfile "$PIDFILE" --make-pidfile \
+      --exec /usr/sbin/nanodhcp -- "$CONF"
+    ;;
+  stop)
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    rm -f "$PIDFILE"
+    ;;
+  restart|reload)
+    "$0" stop
+    sleep 1
+    "$0" start
+    ;;
+  status)
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null && echo running || echo stopped
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,20 @@
+# Пример конфига tinywifi-web для устройства (netOS).
+# Скопировать в /etc/tinywifi/web.toml и запускать с
+# TINYWIFI_CONFIG=/etc/tinywifi/web.toml.
+
+[web]
+listen = "0.0.0.0:80"
+
+[display]
+refresh_secs = 5
+
+[paths]
+hostapd_conf  = "/etc/hostapd/hostapd.conf"
+nanodhcp_conf = "/etc/nanodhcp/nanodhcp.conf"
+leases_file   = "/var/lib/nanodhcp/leases"
+
+[services]
+hostapd  = "hostapd"
+nanodhcp = "nanodhcp"
+web      = "tinywifi-web"
+display  = "tinywifi-display"

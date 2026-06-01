@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::response::{Html, Redirect};
@@ -6,7 +7,9 @@ use axum::response::{Html, Redirect};
 use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::metrics::{self, Memory};
-use tinywifi_core::{interface_ipv4, service_status, HostapdConf, ServiceStatus, SystemStatus};
+use tinywifi_core::{
+    interface_ipv4, service_status, DhcpConfig, HostapdConf, ServiceStatus, SystemStatus,
+};
 
 use crate::state::AppState;
 
@@ -42,6 +45,10 @@ fn layout(title: &str, body: &str) -> Html<String> {
          nav a{{text-decoration:none}}\n\
          table{{border-collapse:collapse;width:100%}}\n\
          td,th{{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #eee}}\n\
+         label{{display:block;margin:.7rem 0 .2rem;font-weight:600}}\n\
+         input{{width:100%;max-width:22rem;padding:.4rem;box-sizing:border-box;font-size:1rem}}\n\
+         form button{{margin-top:1rem;padding:.5rem 1.2rem;font-size:1rem}}\n\
+         .hint{{color:#666;font-size:.85rem;margin:.2rem 0}}\n\
          </style>\n</head>\n<body>\n<nav>{nav}</nav>\n<h1>{title}</h1>\n{body}\n</body>\n</html>\n"
     ))
 }
@@ -115,28 +122,147 @@ pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
     layout("Dashboard", &body)
 }
 
-pub async fn wifi() -> Html<String> {
-    layout(
-        "Wi-Fi",
-        "<p>Edit SSID, password, country and channel.</p>\
-         <p>API: <a href=\"/api/wifi\">GET /api/wifi</a>, POST /api/wifi</p>",
-    )
+/// Shared client-side helpers: POST a JSON form and report the result, plus the
+/// per-page field collectors.
+const FORM_SCRIPT: &str = "\
+<script>\n\
+async function twSave(url, payload, btn){\n\
+  const out = document.getElementById('result');\n\
+  btn.disabled = true; out.style.color=''; out.textContent = 'Сохранение…';\n\
+  try {\n\
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});\n\
+    let j = {}; try { j = await r.json(); } catch(e) {}\n\
+    if (r.ok) { out.style.color='green'; out.textContent='Сохранено ✓'; setTimeout(function(){location.reload();}, 900); }\n\
+    else { out.style.color='red'; out.textContent='Ошибка ' + r.status + ': ' + (j.error || r.statusText); }\n\
+  } catch(e) { out.style.color='red'; out.textContent='Сбой запроса: ' + e; }\n\
+  btn.disabled = false;\n\
+}\n\
+function val(id){ return document.getElementById(id).value; }\n\
+function twWifi(btn){ twSave('/api/wifi', {\n\
+  ssid: val('ssid'), passphrase: val('passphrase'),\n\
+  country_code: val('country'), channel: parseInt(val('channel'),10)\n\
+}, btn); }\n\
+function twDhcp(btn){ twSave('/api/dhcp', {\n\
+  gateway: val('gateway'), range_start: val('range_start'), range_end: val('range_end'),\n\
+  dns: val('dns').split(',').map(function(s){return s.trim();}).filter(function(s){return s;}),\n\
+  lease_time: parseInt(val('lease_time'),10)\n\
+}, btn); }\n\
+</script>\n";
+
+fn fmt_expiry(expires: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if expires > now {
+        format!("через {}", fmt_uptime(expires - now))
+    } else {
+        "истёк".to_string()
+    }
 }
 
-pub async fn dhcp() -> Html<String> {
-    layout(
-        "DHCP",
-        "<p>Edit the DHCP pool, gateway, DNS and lease time.</p>\
-         <p>API: <a href=\"/api/dhcp\">GET /api/dhcp</a>, POST /api/dhcp</p>",
-    )
+pub async fn wifi(State(st): State<AppState>) -> Html<String> {
+    let body = match HostapdConf::from_path(&st.config.paths.hostapd_conf) {
+        Ok(conf) => {
+            let w = conf.wifi_config();
+            let iface = w.interface.unwrap_or_else(|| "wlan0".to_string());
+            format!(
+                "<form onsubmit=\"return false\">\n\
+                 <p class=\"hint\">Интерфейс: {iface}</p>\n\
+                 <label for=\"ssid\">SSID</label>\
+                 <input id=\"ssid\" value=\"{ssid}\" maxlength=\"32\">\n\
+                 <label for=\"passphrase\">Пароль (8–63 символа)</label>\
+                 <input id=\"passphrase\" value=\"{pass}\" minlength=\"8\" maxlength=\"63\">\n\
+                 <label for=\"country\">Страна (2 буквы)</label>\
+                 <input id=\"country\" value=\"{country}\" maxlength=\"2\">\n\
+                 <label for=\"channel\">Канал</label>\
+                 <input id=\"channel\" type=\"number\" value=\"{channel}\" min=\"1\" max=\"165\">\n\
+                 <button onclick=\"twWifi(this)\">Сохранить</button>\n\
+                 <p id=\"result\" role=\"status\"></p>\n\
+                 </form>\n{FORM_SCRIPT}",
+                iface = escape(&iface),
+                ssid = escape(&w.ssid.unwrap_or_default()),
+                pass = escape(&w.wpa_passphrase.unwrap_or_default()),
+                country = escape(&w.country_code.unwrap_or_default()),
+                channel = w.channel.map(|c| c.to_string()).unwrap_or_default(),
+            )
+        }
+        Err(e) => format!(
+            "<p>Конфиг hostapd недоступен: {}</p>",
+            escape(&e.to_string())
+        ),
+    };
+    layout("Wi-Fi", &body)
 }
 
-pub async fn leases() -> Html<String> {
-    layout(
-        "Leases",
-        "<p>Connected DHCP clients.</p>\
-         <p>API: <a href=\"/api/leases\">GET /api/leases</a></p>",
-    )
+pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
+    let body = match DhcpConfig::from_path(&st.config.paths.nanodhcp_conf) {
+        Ok(c) => format!(
+            "<form onsubmit=\"return false\">\n\
+             <p class=\"hint\">Интерфейс: {iface}</p>\n\
+             <label for=\"gateway\">Шлюз (router)</label>\
+             <input id=\"gateway\" value=\"{gw}\">\n\
+             <label for=\"range_start\">Начало пула</label>\
+             <input id=\"range_start\" value=\"{rs}\">\n\
+             <label for=\"range_end\">Конец пула</label>\
+             <input id=\"range_end\" value=\"{re}\">\n\
+             <label for=\"dns\">DNS (через запятую)</label>\
+             <input id=\"dns\" value=\"{dns}\">\n\
+             <label for=\"lease_time\">Аренда, секунд</label>\
+             <input id=\"lease_time\" type=\"number\" value=\"{lt}\" min=\"1\">\n\
+             <button onclick=\"twDhcp(this)\">Сохранить</button>\n\
+             <p id=\"result\" role=\"status\"></p>\n\
+             </form>\n{FORM_SCRIPT}",
+            iface = escape(&c.interface),
+            gw = escape(&c.gateway.to_string()),
+            rs = escape(&c.range_start.to_string()),
+            re = escape(&c.range_end.to_string()),
+            dns = escape(
+                &c.dns
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            lt = c.lease_time,
+        ),
+        Err(e) => format!(
+            "<p>Конфиг nanodhcp недоступен: {}</p>",
+            escape(&e.to_string())
+        ),
+    };
+    layout("DHCP", &body)
+}
+
+pub async fn leases(State(st): State<AppState>) -> Html<String> {
+    let report = LeasesReport::read(&st.config.paths.leases_file);
+    let mut body = format!("<p>Состояние: <strong>{:?}</strong></p>\n", report.state);
+    if let Some(err) = &report.error {
+        body.push_str(&format!(
+            "<p style=\"color:red\">{}</p>\n",
+            escape(err)
+        ));
+    }
+    if report.leases.is_empty() {
+        body.push_str("<p>Активных клиентов нет.</p>\n");
+    } else {
+        body.push_str(
+            "<table>\n<tr><th>Хост</th><th>MAC</th><th>IP</th><th>Статус</th><th>Истекает</th></tr>\n",
+        );
+        for l in &report.leases {
+            body.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:?}</td><td>{}</td></tr>\n",
+                escape(l.hostname.as_deref().unwrap_or("—")),
+                escape(&l.mac),
+                escape(&l.ip.to_string()),
+                l.status,
+                escape(&fmt_expiry(l.lease_expires)),
+            ));
+        }
+        body.push_str("</table>\n");
+    }
+    body.push_str("<p><a href=\"/api/leases\">/api/leases</a></p>");
+    layout("Leases", &body)
 }
 
 const SYSTEM_SCRIPT: &str = "\

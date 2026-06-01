@@ -123,18 +123,23 @@ fn which(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Find the `/etc/init.d` script for `name`, ignoring the leading `S##`/`K##`
-/// run-level prefix (so `nanodhcp` matches `S10nanodhcp`).
+/// Find the `/etc/init.d` script for `name`. An exact filename match wins; the
+/// run-level-prefixed form (`S10nanodhcp` for `nanodhcp`) is the fallback, so a
+/// dedicated `nanodhcp` control script takes precedence over a boot stub.
 fn init_script(name: &str) -> Option<PathBuf> {
     let entries = std::fs::read_dir(INIT_D).ok()?;
+    let mut prefixed = None;
     for entry in entries.flatten() {
         let file_name = entry.file_name();
         let file = file_name.to_string_lossy();
-        if strip_rc_prefix(&file) == name {
+        if file == name {
             return Some(entry.path());
         }
+        if prefixed.is_none() && strip_rc_prefix(&file) == name {
+            prefixed = Some(entry.path());
+        }
     }
-    None
+    prefixed
 }
 
 fn strip_rc_prefix(file: &str) -> &str {
