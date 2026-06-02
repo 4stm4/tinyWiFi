@@ -1,4 +1,5 @@
 mod api;
+mod assets;
 mod pages;
 mod state;
 
@@ -28,6 +29,8 @@ fn config_path() -> String {
 fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(pages::index))
+        .route("/style.css", get(assets::style_css))
+        .route("/fonts/:name", get(assets::font))
         .route("/dashboard", get(pages::dashboard))
         .route("/wifi", get(pages::wifi))
         .route("/dhcp", get(pages::dhcp))

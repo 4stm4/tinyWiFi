@@ -28,28 +28,60 @@ fn escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn layout(title: &str, body: &str) -> Html<String> {
+/// Wi-Fi signal glyph for the brand wordmark; inherits `--accent` via
+/// `currentColor` from `.topbar__brand .mark`.
+const BRAND_MARK: &str = "<svg width=\"20\" height=\"20\" viewBox=\"0 0 100 100\" fill=\"none\" \
+stroke=\"currentColor\" stroke-width=\"7\" stroke-linecap=\"round\">\
+<path d=\"M22 44a40 40 0 0 1 56 0\" opacity=\".4\"/>\
+<path d=\"M34 56a24 24 0 0 1 32 0\" opacity=\".75\"/>\
+<circle cx=\"50\" cy=\"70\" r=\"5\" fill=\"currentColor\" stroke=\"none\"/></svg>";
+
+/// Render a status enum's `Debug` name as a colored Nervum status pill.
+/// Covers `ServiceStatus`, `InterfaceStatus`, `LeasesStatus`, `LeaseStatus`
+/// and `LeasesState`.
+fn pill(text: &str) -> String {
+    let kind = match text {
+        "Running" | "Up" | "Active" | "Available" => "ok",
+        "Stale" | "Down" => "drift",
+        "Error" => "failed",
+        // Stopped, Missing, Empty, Unavailable, Expired
+        _ => "muted",
+    };
+    format!(
+        "<span class=\"pill pill--{kind}\"><span class=\"dot\"></span>{}</span>",
+        escape(text)
+    )
+}
+
+fn layout(title: &str, active: &str, body: &str) -> Html<String> {
     let nav = NAV
         .iter()
-        .map(|(href, label)| format!("<a href=\"{href}\">{label}</a>"))
+        .map(|(href, label)| {
+            let cls = if *href == active {
+                "tw-nav__item is-active"
+            } else {
+                "tw-nav__item"
+            };
+            format!("<a class=\"{cls}\" href=\"{href}\">{label}</a>")
+        })
         .collect::<Vec<_>>()
-        .join(" ");
+        .join("");
     Html(format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+        "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\
+         <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>TinyWifi — {title}</title>\n\
-         <style>\n\
-         body{{font-family:system-ui,sans-serif;margin:0;padding:1rem;max-width:40rem}}\n\
-         nav{{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem;\
-         border-bottom:1px solid #ccc;padding-bottom:.5rem}}\n\
-         nav a{{text-decoration:none}}\n\
-         table{{border-collapse:collapse;width:100%}}\n\
-         td,th{{text-align:left;padding:.25rem .5rem;border-bottom:1px solid #eee}}\n\
-         label{{display:block;margin:.7rem 0 .2rem;font-weight:600}}\n\
-         input{{width:100%;max-width:22rem;padding:.4rem;box-sizing:border-box;font-size:1rem}}\n\
-         form button{{margin-top:1rem;padding:.5rem 1.2rem;font-size:1rem}}\n\
-         .hint{{color:#666;font-size:.85rem;margin:.2rem 0}}\n\
-         </style>\n</head>\n<body>\n<nav>{nav}</nav>\n<h1>{title}</h1>\n{body}\n</body>\n</html>\n"
+         <link rel=\"stylesheet\" href=\"/style.css\">\n\
+         </head>\n<body>\n\
+         <header class=\"tw-top\">\n\
+         <div class=\"topbar__brand\"><span class=\"mark\">{BRAND_MARK}</span>\
+         <span class=\"name\">tiny<b>wifi</b></span></div>\n\
+         <nav class=\"tw-nav\">{nav}</nav>\n\
+         </header>\n\
+         <main class=\"page\">\n\
+         <div class=\"page__head\"><h1 class=\"page__title\">{title}</h1></div>\n\
+         {body}\n\
+         </main>\n</body>\n</html>\n"
     ))
 }
 
@@ -103,23 +135,26 @@ pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
         .filter(|l| l.status == LeaseStatus::Active)
         .count();
 
-    let mut body = String::from("<table>\n");
-    body.push_str(&row("Wi-Fi (hostapd)", &format!("{:?}", status.hostapd)));
+    let mut body = String::from("<table class=\"tbl\"><tbody>\n");
+    body.push_str(&row("Wi-Fi (hostapd)", &pill(&format!("{:?}", status.hostapd))));
     body.push_str(&row("SSID", &escape(&opt(ssid))));
     body.push_str(&row(
         &format!("{iface} IP"),
         &escape(&opt(ip.map(|a| a.to_string()))),
     ));
-    body.push_str(&row(&iface, &format!("{:?}", status.wlan0)));
-    body.push_str(&row("DHCP (nanodhcp)", &format!("{:?}", status.nanodhcp)));
+    body.push_str(&row(&iface, &pill(&format!("{:?}", status.wlan0))));
+    body.push_str(&row(
+        "DHCP (nanodhcp)",
+        &pill(&format!("{:?}", status.nanodhcp)),
+    ));
     body.push_str(&row("Clients", &clients.to_string()));
-    body.push_str(&row("Leases", &format!("{:?}", report.state)));
+    body.push_str(&row("Leases", &pill(&format!("{:?}", report.state))));
     body.push_str(&row("Uptime", &opt(metrics::uptime_secs().map(fmt_uptime))));
     body.push_str(&row("RAM", &opt(metrics::memory().map(fmt_memory))));
     body.push_str(&row("Load", &opt(metrics::load_average().map(fmt_load))));
-    body.push_str("</table>\n<p><a href=\"/api/status\">/api/status</a></p>");
+    body.push_str("</tbody></table>\n<p><a href=\"/api/status\">/api/status</a></p>");
 
-    layout("Dashboard", &body)
+    layout("Dashboard", "/dashboard", &body)
 }
 
 /// Shared client-side helpers: POST a JSON form and report the result, plus the
@@ -167,19 +202,23 @@ pub async fn wifi(State(st): State<AppState>) -> Html<String> {
             let w = conf.wifi_config();
             let iface = w.interface.unwrap_or_else(|| "wlan0".to_string());
             format!(
-                "<form onsubmit=\"return false\">\n\
-                 <p class=\"hint\">Интерфейс: {iface}</p>\n\
-                 <label for=\"ssid\">SSID</label>\
-                 <input id=\"ssid\" value=\"{ssid}\" maxlength=\"32\">\n\
-                 <label for=\"passphrase\">Пароль (8–63 символа)</label>\
-                 <input id=\"passphrase\" value=\"{pass}\" minlength=\"8\" maxlength=\"63\">\n\
-                 <label for=\"country\">Страна (2 буквы)</label>\
-                 <input id=\"country\" value=\"{country}\" maxlength=\"2\">\n\
-                 <label for=\"channel\">Канал</label>\
-                 <input id=\"channel\" type=\"number\" value=\"{channel}\" min=\"1\" max=\"165\">\n\
-                 <button onclick=\"twWifi(this)\">Сохранить</button>\n\
-                 <p id=\"result\" role=\"status\"></p>\n\
-                 </form>\n{FORM_SCRIPT}",
+                "<section class=\"card\"><div class=\"card__body\">\n\
+                 <div class=\"callout\"><div class=\"body\">Интерфейс: <b>{iface}</b></div></div>\n\
+                 <form onsubmit=\"return false\">\n\
+                 <div class=\"form-grid\">\n\
+                 <div class=\"field field--full\"><label for=\"ssid\">SSID</label>\
+                 <input id=\"ssid\" value=\"{ssid}\" maxlength=\"32\"></div>\n\
+                 <div class=\"field field--full\"><label for=\"passphrase\">Пароль (8–63 символа)</label>\
+                 <input id=\"passphrase\" value=\"{pass}\" minlength=\"8\" maxlength=\"63\"></div>\n\
+                 <div class=\"field\"><label for=\"country\">Страна (2 буквы)</label>\
+                 <input id=\"country\" value=\"{country}\" maxlength=\"2\"></div>\n\
+                 <div class=\"field\"><label for=\"channel\">Канал</label>\
+                 <input id=\"channel\" type=\"number\" value=\"{channel}\" min=\"1\" max=\"165\"></div>\n\
+                 </div>\n\
+                 <div class=\"form-actions\">\
+                 <button class=\"btn btn--primary\" onclick=\"twWifi(this)\">Сохранить</button>\
+                 <span id=\"result\" class=\"note\" role=\"status\"></span></div>\n\
+                 </form>\n</div></section>\n{FORM_SCRIPT}",
                 iface = escape(&iface),
                 ssid = escape(&w.ssid.unwrap_or_default()),
                 pass = escape(&w.wpa_passphrase.unwrap_or_default()),
@@ -188,31 +227,36 @@ pub async fn wifi(State(st): State<AppState>) -> Html<String> {
             )
         }
         Err(e) => format!(
-            "<p>Конфиг hostapd недоступен: {}</p>",
+            "<div class=\"callout\" style=\"border-color:var(--status-failed)\">\
+             <div class=\"body\">Конфиг hostapd недоступен: {}</div></div>",
             escape(&e.to_string())
         ),
     };
-    layout("Wi-Fi", &body)
+    layout("Wi-Fi", "/wifi", &body)
 }
 
 pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
     let body = match DhcpConfig::from_path(&st.config.paths.nanodhcp_conf) {
         Ok(c) => format!(
-            "<form onsubmit=\"return false\">\n\
-             <p class=\"hint\">Интерфейс: {iface}</p>\n\
-             <label for=\"gateway\">Шлюз (router)</label>\
-             <input id=\"gateway\" value=\"{gw}\">\n\
-             <label for=\"range_start\">Начало пула</label>\
-             <input id=\"range_start\" value=\"{rs}\">\n\
-             <label for=\"range_end\">Конец пула</label>\
-             <input id=\"range_end\" value=\"{re}\">\n\
-             <label for=\"dns\">DNS (через запятую)</label>\
-             <input id=\"dns\" value=\"{dns}\">\n\
-             <label for=\"lease_time\">Аренда, секунд</label>\
-             <input id=\"lease_time\" type=\"number\" value=\"{lt}\" min=\"1\">\n\
-             <button onclick=\"twDhcp(this)\">Сохранить</button>\n\
-             <p id=\"result\" role=\"status\"></p>\n\
-             </form>\n{FORM_SCRIPT}",
+            "<section class=\"card\"><div class=\"card__body\">\n\
+             <div class=\"callout\"><div class=\"body\">Интерфейс: <b>{iface}</b></div></div>\n\
+             <form onsubmit=\"return false\">\n\
+             <div class=\"form-grid\">\n\
+             <div class=\"field field--full\"><label for=\"gateway\">Шлюз (router)</label>\
+             <input id=\"gateway\" value=\"{gw}\"></div>\n\
+             <div class=\"field\"><label for=\"range_start\">Начало пула</label>\
+             <input id=\"range_start\" value=\"{rs}\"></div>\n\
+             <div class=\"field\"><label for=\"range_end\">Конец пула</label>\
+             <input id=\"range_end\" value=\"{re}\"></div>\n\
+             <div class=\"field field--full\"><label for=\"dns\">DNS (через запятую)</label>\
+             <input id=\"dns\" value=\"{dns}\"></div>\n\
+             <div class=\"field\"><label for=\"lease_time\">Аренда, секунд</label>\
+             <input id=\"lease_time\" type=\"number\" value=\"{lt}\" min=\"1\"></div>\n\
+             </div>\n\
+             <div class=\"form-actions\">\
+             <button class=\"btn btn--primary\" onclick=\"twDhcp(this)\">Сохранить</button>\
+             <span id=\"result\" class=\"note\" role=\"status\"></span></div>\n\
+             </form>\n</div></section>\n{FORM_SCRIPT}",
             iface = escape(&c.interface),
             gw = escape(&c.gateway.to_string()),
             rs = escape(&c.range_start.to_string()),
@@ -227,42 +271,45 @@ pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
             lt = c.lease_time,
         ),
         Err(e) => format!(
-            "<p>Конфиг nanodhcp недоступен: {}</p>",
+            "<div class=\"callout\" style=\"border-color:var(--status-failed)\">\
+             <div class=\"body\">Конфиг nanodhcp недоступен: {}</div></div>",
             escape(&e.to_string())
         ),
     };
-    layout("DHCP", &body)
+    layout("DHCP", "/dhcp", &body)
 }
 
 pub async fn leases(State(st): State<AppState>) -> Html<String> {
     let report = LeasesReport::read(&st.config.paths.leases_file);
-    let mut body = format!("<p>Состояние: <strong>{:?}</strong></p>\n", report.state);
+    let mut body = format!("<p>Состояние: {}</p>\n", pill(&format!("{:?}", report.state)));
     if let Some(err) = &report.error {
         body.push_str(&format!(
-            "<p style=\"color:red\">{}</p>\n",
+            "<div class=\"callout\" style=\"border-color:var(--status-failed)\">\
+             <div class=\"body\">{}</div></div>\n",
             escape(err)
         ));
     }
     if report.leases.is_empty() {
-        body.push_str("<p>Активных клиентов нет.</p>\n");
+        body.push_str("<div class=\"empty\">Активных клиентов нет.</div>\n");
     } else {
         body.push_str(
-            "<table>\n<tr><th>Хост</th><th>MAC</th><th>IP</th><th>Статус</th><th>Истекает</th></tr>\n",
+            "<table class=\"tbl\">\n<thead><tr><th>Хост</th><th>MAC</th><th>IP</th>\
+             <th>Статус</th><th>Истекает</th></tr></thead>\n<tbody>\n",
         );
         for l in &report.leases {
             body.push_str(&format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:?}</td><td>{}</td></tr>\n",
+                "<tr><td class=\"col-host\">{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
                 escape(l.hostname.as_deref().unwrap_or("—")),
                 escape(&l.mac),
                 escape(&l.ip.to_string()),
-                l.status,
+                pill(&format!("{:?}", l.status)),
                 escape(&fmt_expiry(l.lease_expires)),
             ));
         }
-        body.push_str("</table>\n");
+        body.push_str("</tbody></table>\n");
     }
     body.push_str("<p><a href=\"/api/leases\">/api/leases</a></p>");
-    layout("Leases", &body)
+    layout("Leases", "/leases", &body)
 }
 
 const SYSTEM_SCRIPT: &str = "\
@@ -292,13 +339,15 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
         ("Display", &s.display, None),
     ];
 
-    let mut body = String::from("<table>\n<tr><th>Service</th><th>Status</th><th></th></tr>\n");
+    let mut body = String::from(
+        "<table class=\"tbl\">\n<thead><tr><th>Сервис</th><th>Статус</th><th></th></tr></thead>\n<tbody>\n",
+    );
     for (label, unit, config) in items {
         let status = service_status(unit);
         let missing_config = config.map(|c| !file_exists(c)).unwrap_or(false);
-        let mut status_cell = format!("{status:?}");
+        let mut status_cell = pill(&format!("{status:?}"));
         if missing_config {
-            status_cell.push_str(" <em>(config missing)</em>");
+            status_cell.push_str(" <span class=\"tag\">config missing</span>");
         }
         let disabled = if status == ServiceStatus::Missing {
             " disabled"
@@ -306,23 +355,29 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
             ""
         };
         let button = format!(
-            "<button onclick=\"act('/api/services/{}/restart', this)\"{}>Restart</button>",
+            "<button class=\"btn btn--ghost btn--sm\" \
+             onclick=\"act('/api/services/{}/restart', this)\"{}>Restart</button>",
             escape(unit),
             disabled
         );
         body.push_str(&format!(
-            "<tr><th>{}</th><td>{}</td><td>{}</td></tr>\n",
+            "<tr><td class=\"col-host\">{}</td><td>{}</td><td class=\"num\">{}</td></tr>\n",
             escape(label),
             status_cell,
             button
         ));
     }
-    body.push_str("</table>\n");
+    body.push_str("</tbody></table>\n");
     body.push_str(
-        "<h2>Device</h2>\n\
-         <button onclick=\"act('/api/system/reboot', this, 'Reboot the device?')\">Reboot</button>\n",
+        "<h2>Устройство</h2>\n\
+         <div class=\"danger-zone\">\
+         <div class=\"body\"><div class=\"t\">Перезагрузка устройства</div>\
+         <div class=\"d\">Перезапустит точку доступа; клиенты ненадолго отключатся.</div></div>\
+         <button class=\"btn btn--danger\" \
+         onclick=\"act('/api/system/reboot', this, 'Reboot the device?')\">Reboot</button>\
+         </div>\n",
     );
     body.push_str(SYSTEM_SCRIPT);
 
-    layout("System", &body)
+    layout("System", "/system", &body)
 }
