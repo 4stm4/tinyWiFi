@@ -6,19 +6,21 @@ use axum::response::{Html, Redirect};
 
 use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
-use tinywifi_core::metrics::{self, Memory};
+use tinywifi_core::metrics;
 use tinywifi_core::{
     interface_ipv4, service_status, DhcpConfig, HostapdConf, ServiceStatus, SystemStatus,
 };
 
 use crate::state::AppState;
 
+/// Top navigation: (href, Russian label). The English page name is passed by
+/// each handler and drives the document `<title>` and the page-head eyebrow.
 const NAV: &[(&str, &str)] = &[
-    ("/dashboard", "Dashboard"),
+    ("/dashboard", "Панель"),
     ("/wifi", "Wi-Fi"),
     ("/dhcp", "DHCP"),
-    ("/leases", "Leases"),
-    ("/system", "System"),
+    ("/leases", "Клиенты"),
+    ("/system", "Система"),
 ];
 
 fn escape(s: &str) -> String {
@@ -35,6 +37,43 @@ stroke=\"currentColor\" stroke-width=\"7\" stroke-linecap=\"round\">\
 <path d=\"M22 44a40 40 0 0 1 56 0\" opacity=\".4\"/>\
 <path d=\"M34 56a24 24 0 0 1 32 0\" opacity=\".75\"/>\
 <circle cx=\"50\" cy=\"70\" r=\"5\" fill=\"currentColor\" stroke=\"none\"/></svg>";
+
+/// Theme switch glyph — a half-filled "contrast" disc that reads the same in
+/// either theme.
+const THEME_ICON: &str = "<svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" \
+stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"9\"/>\
+<path d=\"M12 3a9 9 0 0 0 0 18z\" fill=\"currentColor\" stroke=\"none\"/></svg>";
+
+// Compact line icons (stroke = currentColor) for the dashboard tiles and the
+// leases table. Kept tiny on purpose — this is an embedded operator panel.
+const ICO_CLIENTS: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"9\" cy=\"8\" r=\"3\"/><path d=\"M3 20a6 6 0 0 1 12 0M16 6a3 3 0 0 1 0 6M21 20a6 6 0 0 0-5-5.9\"/></svg>";
+const ICO_RAM: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"4\" y=\"7\" width=\"16\" height=\"10\" rx=\"1\"/><path d=\"M8 7V5M12 7V5M16 7V5M8 21v-4M16 21v-4\"/></svg>";
+const ICO_UPTIME: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/></svg>";
+const ICO_LOAD: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 12h4l3 7 4-14 3 7h4\"/></svg>";
+const ICO_DEVICE: &str = "<svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"4\" y=\"4\" width=\"16\" height=\"12\" rx=\"1\"/><path d=\"M9 20h6M12 16v4\"/></svg>";
+
+/// Theme toggle + early-restore wiring. The inline restore runs in `<head>` so
+/// the stored theme is applied before first paint (no flash).
+const THEME_SCRIPT: &str = "<script>\n\
+function twToggleTheme(){var d=document.documentElement;\
+var n=d.dataset.theme==='light'?'dark':'light';d.dataset.theme=n;\
+try{localStorage.setItem('tw-theme',n);}catch(e){}}\n\
+</script>\n";
+
+/// A 3-bar signal indicator. Real RSSI is not in the lease data, so the level
+/// is derived from lease validity: full for active, a single bar for expired.
+fn sig(active: bool) -> String {
+    let on = if active { 3 } else { 1 };
+    let bars: String = [5_i32, 8, 11]
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let cls = if i < on { " class=\"on\"" } else { "" };
+            format!("<i{cls} style=\"height:{h}px\"></i>")
+        })
+        .collect();
+    format!("<span class=\"sig\">{bars}</span>")
+}
 
 /// Render a status enum's `Debug` name as a colored Nervum status pill.
 /// Covers `ServiceStatus`, `InterfaceStatus`, `LeasesStatus`, `LeaseStatus`
@@ -53,7 +92,7 @@ fn pill(text: &str) -> String {
     )
 }
 
-fn layout(title: &str, active: &str, body: &str) -> Html<String> {
+fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
     let nav = NAV
         .iter()
         .map(|(href, label)| {
@@ -70,17 +109,22 @@ fn layout(title: &str, active: &str, body: &str) -> Html<String> {
         "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>TinyWifi — {title}</title>\n\
+         <script>try{{var t=localStorage.getItem('tw-theme');if(t)document.documentElement.dataset.theme=t;}}catch(e){{}}</script>\n\
+         <title>TinyWifi — {en}</title>\n\
          <link rel=\"stylesheet\" href=\"/style.css\">\n\
          </head>\n<body>\n\
          <header class=\"tw-top\">\n\
          <div class=\"topbar__brand\"><span class=\"mark\">{BRAND_MARK}</span>\
          <span class=\"name\">tiny<b>wifi</b></span></div>\n\
          <nav class=\"tw-nav\">{nav}</nav>\n\
+         <button class=\"theme-toggle\" onclick=\"twToggleTheme()\" title=\"Тема\" \
+         aria-label=\"Переключить тему\" style=\"margin-left:auto\">{THEME_ICON}</button>\n\
          </header>\n\
          <main class=\"page\">\n\
-         <div class=\"page__head\"><h1 class=\"page__title\">{title}</h1></div>\n\
+         <div class=\"page__head\">\
+         <h1 class=\"page__title\"><span class=\"en\">{en}</span>{title}</h1></div>\n\
          {body}\n\
+         {THEME_SCRIPT}\
          </main>\n</body>\n</html>\n"
     ))
 }
@@ -104,21 +148,22 @@ fn fmt_uptime(secs: u64) -> String {
     }
 }
 
-fn fmt_memory(m: Memory) -> String {
-    format!(
-        "{} / {} MB ({}%)",
-        m.used_kb() / 1024,
-        m.total_kb / 1024,
-        m.used_percent()
-    )
-}
-
-fn fmt_load(l: [f64; 3]) -> String {
-    format!("{:.2} {:.2} {:.2}", l[0], l[1], l[2])
-}
-
 fn row(label: &str, value: &str) -> String {
     format!("<tr><th>{}</th><td>{}</td></tr>\n", escape(label), value)
+}
+
+/// One dashboard stat tile. `value` may contain markup (e.g. a `.unit` span);
+/// `label` and `meta` are escaped.
+fn tile(ico: &str, label: &str, value: &str, meta: &str) -> String {
+    format!(
+        "<div class=\"tile\">\
+         <div class=\"tile__top\"><span class=\"tile__label\">{lab}</span>\
+         <span class=\"tile__ico\">{ico}</span></div>\
+         <div class=\"tile__value\">{value}</div>\
+         <div class=\"tile__meta\">{met}</div></div>",
+        lab = escape(label),
+        met = escape(meta),
+    )
 }
 
 pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
@@ -135,7 +180,45 @@ pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
         .filter(|l| l.status == LeaseStatus::Active)
         .count();
 
-    let mut body = String::from("<table class=\"tbl\"><tbody>\n");
+    // Stat tiles (big numbers).
+    let mem = metrics::memory();
+    let ram_value = mem
+        .as_ref()
+        .map(|m| format!("{}<span class=\"unit\">%</span>", m.used_percent()))
+        .unwrap_or_else(|| "—".to_string());
+    let ram_meta = mem
+        .map(|m| format!("{} / {} MB", m.used_kb() / 1024, m.total_kb / 1024))
+        .unwrap_or_default();
+    let up_value = metrics::uptime_secs()
+        .map(fmt_uptime)
+        .unwrap_or_else(|| "—".to_string());
+    let load = metrics::load_average();
+    let load_value = load
+        .map(|l| format!("{:.2}", l[0]))
+        .unwrap_or_else(|| "—".to_string());
+    let load_meta = load
+        .map(|l| format!("{:.2} · {:.2}", l[1], l[2]))
+        .unwrap_or_default();
+
+    let mut body = String::from("<div class=\"tiles\">");
+    body.push_str(&tile(
+        ICO_CLIENTS,
+        "Clients · Клиенты",
+        &clients.to_string(),
+        "активные",
+    ));
+    body.push_str(&tile(ICO_RAM, "RAM · Память", &ram_value, &ram_meta));
+    body.push_str(&tile(
+        ICO_UPTIME,
+        "Uptime · Аптайм",
+        &up_value,
+        "с перезагрузки",
+    ));
+    body.push_str(&tile(ICO_LOAD, "Load · Нагрузка", &load_value, &load_meta));
+    body.push_str("</div>\n");
+
+    // Network / service status.
+    body.push_str("<h2>Состояние</h2>\n<table class=\"tbl\"><tbody>\n");
     body.push_str(&row("Wi-Fi (hostapd)", &pill(&format!("{:?}", status.hostapd))));
     body.push_str(&row("SSID", &escape(&opt(ssid))));
     body.push_str(&row(
@@ -147,14 +230,10 @@ pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
         "DHCP (nanodhcp)",
         &pill(&format!("{:?}", status.nanodhcp)),
     ));
-    body.push_str(&row("Clients", &clients.to_string()));
     body.push_str(&row("Leases", &pill(&format!("{:?}", report.state))));
-    body.push_str(&row("Uptime", &opt(metrics::uptime_secs().map(fmt_uptime))));
-    body.push_str(&row("RAM", &opt(metrics::memory().map(fmt_memory))));
-    body.push_str(&row("Load", &opt(metrics::load_average().map(fmt_load))));
     body.push_str("</tbody></table>\n<p><a href=\"/api/status\">/api/status</a></p>");
 
-    layout("Dashboard", "/dashboard", &body)
+    layout("Сводка", "Dashboard", "/dashboard", &body)
 }
 
 /// Shared client-side helpers: POST a JSON form and report the result, plus the
@@ -206,13 +285,15 @@ pub async fn wifi(State(st): State<AppState>) -> Html<String> {
                  <div class=\"callout\"><div class=\"body\">Интерфейс: <b>{iface}</b></div></div>\n\
                  <form onsubmit=\"return false\">\n\
                  <div class=\"form-grid\">\n\
-                 <div class=\"field field--full\"><label for=\"ssid\">SSID</label>\
+                 <div class=\"field field--full\"><label for=\"ssid\">SSID <span class=\"en\">network name</span></label>\
                  <input id=\"ssid\" value=\"{ssid}\" maxlength=\"32\"></div>\n\
-                 <div class=\"field field--full\"><label for=\"passphrase\">Пароль (8–63 символа)</label>\
-                 <input id=\"passphrase\" value=\"{pass}\" minlength=\"8\" maxlength=\"63\"></div>\n\
-                 <div class=\"field\"><label for=\"country\">Страна (2 буквы)</label>\
-                 <input id=\"country\" value=\"{country}\" maxlength=\"2\"></div>\n\
-                 <div class=\"field\"><label for=\"channel\">Канал</label>\
+                 <div class=\"field field--full\"><label for=\"passphrase\">Пароль <span class=\"en\">passphrase</span></label>\
+                 <input id=\"passphrase\" value=\"{pass}\" minlength=\"8\" maxlength=\"63\">\
+                 <div class=\"hint\">8–63 символа</div></div>\n\
+                 <div class=\"field\"><label for=\"country\">Страна <span class=\"en\">country</span></label>\
+                 <input id=\"country\" value=\"{country}\" maxlength=\"2\">\
+                 <div class=\"hint\">2 буквы, ISO-3166</div></div>\n\
+                 <div class=\"field\"><label for=\"channel\">Канал <span class=\"en\">channel</span></label>\
                  <input id=\"channel\" type=\"number\" value=\"{channel}\" min=\"1\" max=\"165\"></div>\n\
                  </div>\n\
                  <div class=\"form-actions\">\
@@ -232,7 +313,7 @@ pub async fn wifi(State(st): State<AppState>) -> Html<String> {
             escape(&e.to_string())
         ),
     };
-    layout("Wi-Fi", "/wifi", &body)
+    layout("Точка доступа", "Wi-Fi", "/wifi", &body)
 }
 
 pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
@@ -242,16 +323,16 @@ pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
              <div class=\"callout\"><div class=\"body\">Интерфейс: <b>{iface}</b></div></div>\n\
              <form onsubmit=\"return false\">\n\
              <div class=\"form-grid\">\n\
-             <div class=\"field field--full\"><label for=\"gateway\">Шлюз (router)</label>\
+             <div class=\"field field--full\"><label for=\"gateway\">Шлюз <span class=\"en\">gateway</span></label>\
              <input id=\"gateway\" value=\"{gw}\"></div>\n\
-             <div class=\"field\"><label for=\"range_start\">Начало пула</label>\
+             <div class=\"field\"><label for=\"range_start\">Начало пула <span class=\"en\">pool start</span></label>\
              <input id=\"range_start\" value=\"{rs}\"></div>\n\
-             <div class=\"field\"><label for=\"range_end\">Конец пула</label>\
+             <div class=\"field\"><label for=\"range_end\">Конец пула <span class=\"en\">pool end</span></label>\
              <input id=\"range_end\" value=\"{re}\"></div>\n\
-             <div class=\"field field--full\"><label for=\"dns\">DNS (через запятую)</label>\
-             <input id=\"dns\" value=\"{dns}\"></div>\n\
-             <div class=\"field\"><label for=\"lease_time\">Аренда, секунд</label>\
-             <input id=\"lease_time\" type=\"number\" value=\"{lt}\" min=\"1\"></div>\n\
+             <div class=\"field field--full\"><label for=\"dns\">DNS <span class=\"en\">resolvers</span></label>\
+             <input id=\"dns\" value=\"{dns}\"><div class=\"hint\">через запятую</div></div>\n\
+             <div class=\"field\"><label for=\"lease_time\">Аренда <span class=\"en\">lease</span></label>\
+             <input id=\"lease_time\" type=\"number\" value=\"{lt}\" min=\"1\"><div class=\"hint\">секунд</div></div>\n\
              </div>\n\
              <div class=\"form-actions\">\
              <button class=\"btn btn--primary\" onclick=\"twDhcp(this)\">Сохранить</button>\
@@ -276,7 +357,7 @@ pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
             escape(&e.to_string())
         ),
     };
-    layout("DHCP", "/dhcp", &body)
+    layout("Выдача адресов", "DHCP", "/dhcp", &body)
 }
 
 pub async fn leases(State(st): State<AppState>) -> Html<String> {
@@ -294,22 +375,26 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
     } else {
         body.push_str(
             "<table class=\"tbl\">\n<thead><tr><th>Хост</th><th>MAC</th><th>IP</th>\
-             <th>Статус</th><th>Истекает</th></tr></thead>\n<tbody>\n",
+             <th>Сигнал</th><th>Статус</th><th>Истекает</th></tr></thead>\n<tbody>\n",
         );
         for l in &report.leases {
+            let active = l.status == LeaseStatus::Active;
             body.push_str(&format!(
-                "<tr><td class=\"col-host\">{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
-                escape(l.hostname.as_deref().unwrap_or("—")),
-                escape(&l.mac),
-                escape(&l.ip.to_string()),
-                pill(&format!("{:?}", l.status)),
-                escape(&fmt_expiry(l.lease_expires)),
+                "<tr><td class=\"col-host\"><span class=\"dev-ico\">{ico}</span>{host}</td>\
+                 <td>{mac}</td><td>{ip}</td><td>{sig}</td><td>{status}</td><td>{exp}</td></tr>\n",
+                ico = ICO_DEVICE,
+                host = escape(l.hostname.as_deref().unwrap_or("—")),
+                mac = escape(&l.mac),
+                ip = escape(&l.ip.to_string()),
+                sig = sig(active),
+                status = pill(&format!("{:?}", l.status)),
+                exp = escape(&fmt_expiry(l.lease_expires)),
             ));
         }
         body.push_str("</tbody></table>\n");
     }
     body.push_str("<p><a href=\"/api/leases\">/api/leases</a></p>");
-    layout("Leases", "/leases", &body)
+    layout("Клиенты", "Leases", "/leases", &body)
 }
 
 const SYSTEM_SCRIPT: &str = "\
@@ -379,5 +464,5 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
     );
     body.push_str(SYSTEM_SCRIPT);
 
-    layout("System", "/system", &body)
+    layout("Система", "System", "/system", &body)
 }

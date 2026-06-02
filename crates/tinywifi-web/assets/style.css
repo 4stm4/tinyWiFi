@@ -1110,3 +1110,7 @@ body { overflow: auto; min-height: 100vh; display: block; }
 
 /* the brand wordmark in the topbar uses the Audiowide brand face */
 .topbar__brand .name { font-size: 18px; }
+
+/* device glyph inside the leases host cell */
+.col-host .dev-ico { color: var(--fg-4); margin-right: 8px; display: inline-flex; vertical-align: -3px; }
+.tbl .sig { vertical-align: middle; }
