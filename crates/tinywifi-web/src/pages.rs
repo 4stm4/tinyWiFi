@@ -8,7 +8,8 @@ use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    awg_binary, scan_tunnels, AwgTunnelStatus, AWG_CONF_DIR,
+    awg_binary, scan_tunnels, wan_candidates, wan_status, AwgTunnelStatus, IfaceState,
+    WanConfig, WanMode, AWG_CONF_DIR, WAN_CONF_PATH,
     interface_ipv4, service_status, DhcpConfig, HostapdConf, ServiceStatus, SystemStatus,
 };
 
@@ -21,6 +22,7 @@ const NAV: &[(&str, &str)] = &[
     ("/wifi", "Wi-Fi"),
     ("/dhcp", "DHCP"),
     ("/leases", "Клиенты"),
+    ("/wan", "WAN"),
     ("/vpn", "VPN"),
     ("/system", "Система"),
 ];
@@ -398,6 +400,132 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
     body.push_str("<p><a href=\"/api/leases\">/api/leases</a></p>");
     layout("Клиенты", "Leases", "/leases", &body)
 }
+
+pub async fn wan(_st: State<AppState>) -> Html<String> {
+    let candidates = wan_candidates();
+    let saved = WanConfig::load();
+
+    // Active interface: saved config or first candidate
+    let active_iface = saved
+        .as_ref()
+        .map(|c| c.interface.clone())
+        .or_else(|| candidates.first().cloned())
+        .unwrap_or_else(|| "eth0".to_string());
+
+    let status = wan_status(&active_iface);
+    let mode = saved.as_ref().map(|c| c.mode).unwrap_or(WanMode::Dhcp);
+
+    let online_pill = if status.online {
+        pill("Up")
+    } else {
+        pill("Down")
+    };
+    let state_pill = match status.state {
+        IfaceState::Up      => pill("Up"),
+        IfaceState::Down    => pill("Down"),
+        IfaceState::Missing => pill("Missing"),
+    };
+
+    let mut body = String::new();
+
+    // Status card
+    body.push_str("<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n");
+    body.push_str("<h2 style=\"margin:0 0 .75rem\">Состояние</h2>\n");
+    body.push_str("<table class=\"tbl\"><tbody>\n");
+    body.push_str(&row("Интерфейс", &escape(&active_iface)));
+    body.push_str(&row("Канал", &state_pill));
+    body.push_str(&row("Адрес", &escape(status.address.as_deref().unwrap_or("—"))));
+    body.push_str(&row("Шлюз",  &escape(status.gateway.as_deref().unwrap_or("—"))));
+    body.push_str(&row("DNS", &escape(&if status.dns.is_empty() { "—".into() } else { status.dns.join(", ") })));
+    body.push_str(&format!("<tr><th>Интернет</th><td>{online_pill}</td></tr>\n"));
+    body.push_str("</tbody></table>\n");
+    body.push_str("</div></section>\n");
+
+    // Config card
+    // Interface selector options
+    let iface_options: String = candidates
+        .iter()
+        .map(|n| {
+            let sel = if n == &active_iface { " selected" } else { "" };
+            format!("<option value=\"{n}\"{sel}>{n}</option>")
+        })
+        .collect();
+
+    let (dhcp_sel, static_sel) = match mode {
+        WanMode::Dhcp   => (" selected", ""),
+        WanMode::Static => ("", " selected"),
+    };
+
+    let static_addr = saved.as_ref().and_then(|c| c.address.clone()).unwrap_or_default();
+    let static_gw   = saved.as_ref().and_then(|c| c.gateway.clone()).unwrap_or_default();
+    let static_dns  = saved.as_ref()
+        .and_then(|c| c.dns.as_ref())
+        .map(|d| d.join(", "))
+        .unwrap_or_default();
+
+    body.push_str(&format!(
+        "<section class=\"card\"><div class=\"card__body\">\n\
+         <h2 style=\"margin:0 0 .75rem\">Настройка</h2>\n\
+         <form onsubmit=\"return false\">\n\
+         <div class=\"form-grid\">\n\
+         <div class=\"field\"><label for=\"wan-iface\">Интерфейс <span class=\"en\">interface</span></label>\
+         <select id=\"wan-iface\" onchange=\"wanModeToggle()\">{iface_options}</select></div>\n\
+         <div class=\"field\"><label for=\"wan-mode\">Режим <span class=\"en\">mode</span></label>\
+         <select id=\"wan-mode\" onchange=\"wanModeToggle()\">\
+         <option value=\"dhcp\"{dhcp_sel}>DHCP (авто)</option>\
+         <option value=\"static\"{static_sel}>Static (ручной)</option>\
+         </select></div>\n\
+         </div>\n\
+         <div id=\"wan-static\" style=\"display:none\">\n\
+         <div class=\"form-grid\">\n\
+         <div class=\"field\"><label for=\"wan-addr\">Адрес <span class=\"en\">address/prefix</span></label>\
+         <input id=\"wan-addr\" value=\"{static_addr}\" placeholder=\"192.168.1.2/24\"></div>\n\
+         <div class=\"field\"><label for=\"wan-gw\">Шлюз <span class=\"en\">gateway</span></label>\
+         <input id=\"wan-gw\" value=\"{static_gw}\" placeholder=\"192.168.1.1\"></div>\n\
+         <div class=\"field field--full\"><label for=\"wan-dns\">DNS</label>\
+         <input id=\"wan-dns\" value=\"{static_dns}\" placeholder=\"8.8.8.8, 1.1.1.1\">\
+         <div class=\"hint\">через запятую</div></div>\n\
+         </div>\n\
+         </div>\n\
+         <div class=\"form-actions\">\
+         <button class=\"btn btn--primary\" onclick=\"wanSave(this)\">Применить</button>\
+         <span id=\"wan-result\" class=\"note\" role=\"status\"></span>\
+         </div>\n\
+         </form>\n</div></section>\n",
+    ));
+
+    body.push_str("<p><a href=\"/api/wan\">/api/wan</a></p>\n");
+    body.push_str(WAN_SCRIPT);
+
+    layout("Интернет", "WAN", "/wan", &body)
+}
+
+const WAN_SCRIPT: &str = "\
+<script>\n\
+function wanModeToggle(){\n\
+  var m=document.getElementById('wan-mode').value;\n\
+  document.getElementById('wan-static').style.display=m==='static'?'':'none';\n\
+}\n\
+wanModeToggle();\n\
+async function wanSave(btn){\n\
+  var out=document.getElementById('wan-result');\n\
+  btn.disabled=true; out.style.color=''; out.textContent='Применяю…';\n\
+  var payload={\n\
+    interface:document.getElementById('wan-iface').value,\n\
+    mode:document.getElementById('wan-mode').value,\n\
+    address:document.getElementById('wan-addr')?.value||null,\n\
+    gateway:document.getElementById('wan-gw')?.value||null,\n\
+    dns:document.getElementById('wan-dns')?.value.split(',').map(function(s){return s.trim();}).filter(Boolean)||null\n\
+  };\n\
+  try{\n\
+    var r=await fetch('/api/wan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});\n\
+    var j={}; try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';out.textContent='Применено ✓';setTimeout(function(){location.reload();},1200);}\n\
+    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+  btn.disabled=false;\n\
+}\n\
+</script>\n";
 
 pub async fn vpn(_st: State<AppState>) -> Html<String> {
     let has_binary = awg_binary().is_some();

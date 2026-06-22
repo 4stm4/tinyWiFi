@@ -5,6 +5,7 @@
 //! reading, restarting, or rendering data.
 
 pub mod amnezia;
+pub mod wan;
 pub mod config;
 pub mod file;
 pub mod hostapd;
@@ -34,6 +35,10 @@ pub use service::{
     service_status, service_stop, ServiceError, ServiceStatus,
 };
 pub use status::{InterfaceStatus, LeasesStatus, SystemStatus};
+pub use wan::{
+    apply_wan, wan_candidates, wan_status, IfaceState, WanConfig, WanMode, WanStatus,
+    WAN_CONF_PATH,
+};
 pub use wifi::{stage_wifi, update_wifi, WifiError, WifiSettings};
 
 /// Crate version, surfaced in the dashboard and on the display.

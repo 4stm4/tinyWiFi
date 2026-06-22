@@ -9,10 +9,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use tinywifi_core::{
-    discard_backup, import_tunnel, leases::LeasesReport, revert, scan_tunnels, service_restart,
-    service_status, stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp, update_wifi,
-    AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError,
-    HostapdConf, SystemStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
+    apply_wan, discard_backup, import_tunnel, leases::LeasesReport, revert, scan_tunnels,
+    service_restart, service_status, stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp,
+    update_wifi, wan_candidates, wan_status, AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig,
+    DhcpSettings, DhcpUpdateError, HostapdConf, SystemStatus, WanConfig, WanMode, WanStatus,
+    WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -215,6 +216,33 @@ pub async fn vpn_import(
     }
     import_tunnel(&body.config, name, AWG_CONF_DIR)
         .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(ok())
+}
+
+// ── WAN ──────────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct WanGetResponse {
+    pub candidates: Vec<String>,
+    pub config: Option<WanConfig>,
+    pub status: Option<WanStatus>,
+}
+
+pub async fn wan_get(_st: State<AppState>) -> Json<WanGetResponse> {
+    let candidates = wan_candidates();
+    let config = WanConfig::load();
+    let status = config
+        .as_ref()
+        .map(|c| wan_status(&c.interface))
+        .or_else(|| candidates.first().map(|i| wan_status(i)));
+    Json(WanGetResponse { candidates, config, status })
+}
+
+pub async fn wan_post(Json(body): Json<WanConfig>) -> Result<Json<Value>, ApiError> {
+    body.save()
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    apply_wan(&body)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(ok())
 }
 

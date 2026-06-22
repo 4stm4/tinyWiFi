@@ -36,6 +36,8 @@ fn build_router(state: AppState) -> Router {
         .route("/dhcp", get(pages::dhcp))
         .route("/leases", get(pages::leases))
         .route("/system", get(pages::system))
+        .route("/wan", get(pages::wan))
+        .route("/api/wan", get(api::wan_get).post(api::wan_post))
         .route("/vpn", get(pages::vpn))
         .route("/api/vpn", get(api::vpn_list).post(api::vpn_import))
         .route("/api/vpn/:name/up", post(api::vpn_up))
