@@ -11,7 +11,7 @@ refresh_secs = 10
 [paths]
 hostapd_conf = "/etc/hostapd/hostapd.conf"
 nanodhcp_conf = "/etc/nanodhcp/nanodhcp.conf"
-leases_file = "/var/lib/nanodhcp/leases.json"
+leases_file = "/var/lib/nanodhcp/leases"
 
 [services]
 hostapd = "hostapd"
