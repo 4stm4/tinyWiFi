@@ -8,8 +8,8 @@ use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    awg_binary, scan_tunnels, wan_candidates, wan_status, AwgTunnelStatus, IfaceState,
-    WanConfig, WanMode, AWG_CONF_DIR, WAN_CONF_PATH,
+    scan_tunnels, wan_candidates, wan_status, AwgTunnelStatus, IfaceState,
+    WanConfig, WanMode, AWG_CONF_DIR,
     interface_ipv4, service_status, DhcpConfig, HostapdConf, ServiceStatus, SystemStatus,
 };
 
@@ -528,183 +528,191 @@ async function wanSave(btn){\n\
 </script>\n";
 
 pub async fn vpn(_st: State<AppState>) -> Html<String> {
-    let has_binary = awg_binary().is_some();
+    use tinywifi_core::load_bypass_list;
     let tunnels = scan_tunnels(AWG_CONF_DIR);
+    let bypass = load_bypass_list();
 
     let mut body = String::new();
 
-    // Tool status banner
-    if has_binary {
-        body.push_str("<div class=\"callout\"><div class=\"body\">awg: найден &mdash; <code>/usr/bin/awg</code></div></div>\n");
-    } else {
-        body.push_str("<div class=\"callout\" style=\"border-color:var(--status-failed)\"><div class=\"body\">\
-            <b>awg не найден.</b> Установите <code>amneziawg-tools</code>.\
-            </div></div>\n");
-    }
+    // ── Section 1: Tunnel list ─────────────────────────────────────────────
+    body.push_str("<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n");
+    body.push_str("<h2 style=\"margin:0 0 1rem\">Мои туннели</h2>\n");
 
     if tunnels.is_empty() {
-        body.push_str(&format!(
-            "<div class=\"empty\">Нет конфигов в <code>{AWG_CONF_DIR}</code>.</div>\n"
-        ));
+        body.push_str("<div class=\"empty\" style=\"margin:.5rem 0 1rem\">Нет туннелей. Добавьте ниже.</div>\n");
     } else {
+        body.push_str("<div style=\"display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem\">\n");
         for t in &tunnels {
-            let status_str = match t.status {
-                AwgTunnelStatus::Up      => "Up",
-                AwgTunnelStatus::Down    => "Down",
-                AwgTunnelStatus::Missing => "Missing",
-            };
-            let pill_html = pill(status_str);
-
-            let addrs = if t.iface.addresses.is_empty() {
-                "—".to_string()
-            } else {
-                t.iface.addresses.join(", ")
-            };
-            let port = t.iface.listen_port.map(|p| p.to_string()).unwrap_or_else(|| "—".to_string());
-            let peers_count = t.peers.len();
-
-            // Obfuscation params
-            let obf = if t.iface.jc.is_some() {
-                format!(
-                    "Jc={} Jmin={} Jmax={} S1={} S2={} H1={} H2={} H3={} H4={}",
-                    t.iface.jc.unwrap_or(0),
-                    t.iface.jmin.unwrap_or(0),
-                    t.iface.jmax.unwrap_or(0),
-                    t.iface.s1.unwrap_or(0),
-                    t.iface.s2.unwrap_or(0),
-                    t.iface.h1.as_deref().unwrap_or("—"),
-                    t.iface.h2.as_deref().unwrap_or("—"),
-                    t.iface.h3.as_deref().unwrap_or("—"),
-                    t.iface.h4.as_deref().unwrap_or("—"),
-                )
-            } else {
-                "нет (стандартный WireGuard)".to_string()
-            };
-
+            let is_up = t.status == AwgTunnelStatus::Up;
+            let endpoint = t.peers.first()
+                .and_then(|p| p.endpoint.as_deref())
+                .unwrap_or("—");
+            let dot_color = if is_up { "var(--status-ok)" } else { "var(--text-muted)" };
             body.push_str(&format!(
-                "<section class=\"card\" style=\"margin-bottom:1rem\">\
-                 <div class=\"card__body\">\
-                 <div style=\"display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem\">\
-                 <h2 style=\"margin:0;font-size:1.1rem\">{name}</h2>{pill}\
+                "<div style=\"display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;\
+                 background:var(--surface-2);border-radius:6px\">\
+                 <span style=\"width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0\"></span>\
+                 <div style=\"flex:1;min-width:0\">\
+                 <div style=\"font-weight:600\">{name}</div>\
+                 <div style=\"font-size:.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap\">{ep}</div>\
                  </div>\
-                 <table class=\"tbl\"><tbody>\n",
-                name = escape(&t.name),
-                pill = pill_html,
-            ));
-            body.push_str(&row("Адрес", &escape(&addrs)));
-            body.push_str(&row("Порт", &escape(&port)));
-            body.push_str(&row("Пиров", &peers_count.to_string()));
-            body.push_str(&row("Обфускация", &escape(&obf)));
-            body.push_str("</tbody></table>\n");
-
-            // Peers table
-            if !t.peers.is_empty() {
-                body.push_str(
-                    "<h3 style=\"margin:.75rem 0 .4rem\">Пиры</h3>\
-                     <table class=\"tbl\"><thead>\
-                     <tr><th>PublicKey</th><th>Endpoint</th><th>AllowedIPs</th><th>Keepalive</th></tr>\
-                     </thead><tbody>\n",
-                );
-                for p in &t.peers {
-                    let pk_short = if p.public_key.len() > 20 {
-                        format!("{}…", &p.public_key[..20])
-                    } else {
-                        p.public_key.clone()
-                    };
-                    body.push_str(&format!(
-                        "<tr><td class=\"col-host\" title=\"{pk_full}\">{pk}</td>\
-                         <td>{ep}</td><td>{ips}</td><td>{ka}</td></tr>\n",
-                        pk_full = escape(&p.public_key),
-                        pk = escape(&pk_short),
-                        ep = escape(p.endpoint.as_deref().unwrap_or("—")),
-                        ips = escape(&p.allowed_ips.join(", ")),
-                        ka = p.persistent_keepalive.map(|k| format!("{k}s")).unwrap_or_else(|| "—".to_string()),
-                    ));
-                }
-                body.push_str("</tbody></table>\n");
-            }
-
-            // Up/Down buttons
-            let (up_disabled, down_disabled) = match t.status {
-                AwgTunnelStatus::Up      => (" disabled", ""),
-                AwgTunnelStatus::Down    => ("", " disabled"),
-                AwgTunnelStatus::Missing => (" disabled", " disabled"),
-            };
-            body.push_str(&format!(
-                "<div class=\"form-actions\" style=\"margin-top:.75rem\">\
-                 <button class=\"btn btn--primary\" onclick=\"vpnAct('/api/vpn/{n}/up',this)'{up_d}'>Up</button>\
-                 <button class=\"btn btn--ghost\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\"{down_d}>Down</button>\
-                 <span id=\"vpn-result-{n}\" class=\"note\" role=\"status\"></span>\
+                 <div id=\"vpn-result-{n}\" class=\"note\" role=\"status\" style=\"font-size:.8rem\"></div>\
+                 {btn}\
                  </div>\n",
+                dot_color = dot_color,
+                name = escape(&t.name),
+                ep = escape(endpoint),
                 n = escape(&t.name),
-                up_d = up_disabled,
-                down_d = down_disabled,
+                btn = if is_up {
+                    format!("<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\">Отключить</button>",
+                        n = escape(&t.name))
+                } else {
+                    format!("<button class=\"btn btn--primary btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/up',this)\">Подключить</button>",
+                        n = escape(&t.name))
+                },
             ));
-
-            body.push_str("</div></section>\n");
         }
+        body.push_str("</div>\n");
     }
 
-    // Import form
+    // Toggle button to show/hide import form
     body.push_str(
-        "<section class=\"card\" style=\"margin-top:1.5rem\">\
-         <div class=\"card__body\">\
-         <h2 style=\"margin:0 0 .75rem\">Добавить туннель</h2>\
-         <div class=\"form-grid\">\
-         <div class=\"field\"><label for=\"vpn-name\">Имя <span class=\"en\">name</span></label>\
-         <input id=\"vpn-name\" value=\"awg0\" maxlength=\"32\"><div class=\"hint\">имя файла, напр. awg0</div></div>\
+        "<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnToggleImport()\" id=\"vpn-add-btn\">\
+         + Добавить туннель\
+         </button>\n\
+         <div id=\"vpn-import-form\" style=\"display:none;margin-top:.75rem\">\n\
+         <div class=\"field\" style=\"margin-bottom:.5rem\">\
+         <label for=\"vpn-name\">Имя туннеля</label>\
+         <input id=\"vpn-name\" value=\"awg0\" maxlength=\"32\" placeholder=\"awg0\">\
          </div>\
-         <div class=\"field field--full\" style=\"margin-top:.5rem\">\
-         <label for=\"vpn-import-text\">Конфиг <span class=\"en\">paste .conf or vpn://...</span></label>\
-         <textarea id=\"vpn-import-text\" rows=\"8\" \
-         style=\"width:100%;font-family:monospace;font-size:.8rem;resize:vertical;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.5rem\" \
-         placeholder=\"[Interface]&#10;PrivateKey = ...&#10;&#10;или vpn://AAALR...\"></textarea>\
+         <div class=\"field\" style=\"margin-bottom:.5rem\">\
+         <label for=\"vpn-import-text\">Конфиг <span class=\"en\">(.conf или vpn://...)</span></label>\
+         <textarea id=\"vpn-import-text\" rows=\"7\" \
+         style=\"width:100%;box-sizing:border-box;font-family:monospace;font-size:.8rem;\
+         resize:vertical;background:var(--surface-1);color:var(--text);\
+         border:1px solid var(--border);border-radius:4px;padding:.5rem\" \
+         placeholder=\"[Interface]\nPrivateKey = ...\n\nили vpn://AAALR...\"></textarea>\
          </div>\
          <div class=\"form-actions\">\
          <button class=\"btn btn--primary\" onclick=\"vpnImport(this)\">Импортировать</button>\
+         <button class=\"btn btn--ghost\" onclick=\"vpnToggleImport()\">Отмена</button>\
          <span id=\"vpn-import-result\" class=\"note\" role=\"status\"></span>\
          </div>\
-         </div></section>\n"
+         </div>\n"
     );
-    body.push_str("<p><a href=\"/api/vpn\">/api/vpn</a></p>\n");
-    body.push_str(VPN_SCRIPT);
+    body.push_str("</div></section>\n");
 
+    // ── Section 2: Bypass list ─────────────────────────────────────────────
+    body.push_str("<section class=\"card\"><div class=\"card__body\">\n");
+    body.push_str(
+        "<h2 style=\"margin:0 0 .4rem\">Обход VPN</h2>\
+         <p style=\"margin:0 0 .75rem;font-size:.85rem;color:var(--text-muted)\">\
+         Адреса и сети, которые всегда идут напрямую (не через туннель).\
+         </p>\n"
+    );
+
+    // Bypass entries list
+    body.push_str("<div id=\"bypass-list\">\n");
+    if bypass.is_empty() {
+        body.push_str("<div class=\"empty\" style=\"margin:.5rem 0\">Нет исключений — весь трафик через VPN.</div>\n");
+    }
+    for entry in &bypass {
+        body.push_str(&format!(
+            "<div style=\"display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem\">\
+             <code style=\"flex:1;font-size:.85rem\">{entry}</code>\
+             <button class=\"btn btn--ghost btn--sm\" onclick=\"bypassRemove(this,'{entry}')\">✕</button>\
+             </div>\n",
+            entry = escape(entry),
+        ));
+    }
+    body.push_str("</div>\n");
+
+    // Add entry form
+    body.push_str(
+        "<div style=\"display:flex;gap:.5rem;margin-top:.5rem\" id=\"bypass-add-row\">\
+         <input id=\"bypass-input\" placeholder=\"1.2.3.4 или 192.168.0.0/16\" \
+         style=\"flex:1\" onkeydown=\"if(event.key==='Enter')bypassAdd()\">\
+         <button class=\"btn btn--primary btn--sm\" onclick=\"bypassAdd()\">Добавить</button>\
+         </div>\
+         <span id=\"bypass-result\" class=\"note\" role=\"status\" style=\"display:block;margin-top:.4rem\"></span>\n"
+    );
+    body.push_str("</div></section>\n");
+
+    body.push_str(VPN_SCRIPT);
     layout("Туннели", "VPN", "/vpn", &body)
 }
 
 const VPN_SCRIPT: &str = "\
 <script>\n\
-async function vpnImport(btn) {\n\
-  const out = document.getElementById('vpn-import-result');\n\
-  const name = document.getElementById('vpn-name').value.trim();\n\
-  const config = document.getElementById('vpn-import-text').value.trim();\n\
-  if (!name || !config) { out.style.color='red'; out.textContent='Заполните имя и конфиг'; return; }\n\
-  btn.disabled = true; out.style.color=''; out.textContent='Импорт…';\n\
-  try {\n\
-    const r = await fetch('/api/vpn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, config})});\n\
-    let j = {}; try { j = await r.json(); } catch(e) {}\n\
-    if (r.ok) { out.style.color='green'; out.textContent='Импортировано ✓'; setTimeout(function(){ location.reload(); }, 900); }\n\
-    else { out.style.color='red'; out.textContent='Ошибка: ' + (j.error || r.statusText); }\n\
-  } catch(e) { out.style.color='red'; out.textContent='Сбой: '+e; }\n\
-  btn.disabled = false;\n\
+var _bypassEntries = Array.from(document.querySelectorAll('#bypass-list code')).map(function(e){return e.textContent.trim();});\n\
+\n\
+function vpnToggleImport(){\n\
+  var f=document.getElementById('vpn-import-form');\n\
+  f.style.display=f.style.display==='none'?'':'none';\n\
 }\n\
-async function vpnAct(url, btn) {\n\
-  const name = url.split('/')[3];\n\
-  const out = document.getElementById('vpn-result-' + name);\n\
-  btn.disabled = true;\n\
-  if (out) { out.style.color=''; out.textContent='Working…'; }\n\
-  try {\n\
-    const r = await fetch(url, {method:'POST'});\n\
-    let j = {}; try { j = await r.json(); } catch(e) {}\n\
-    if (out) {\n\
-      out.style.color = r.ok ? 'green' : 'red';\n\
-      out.textContent = r.ok ? 'OK' : ('Error: ' + (j.error || r.statusText));\n\
-    }\n\
-    if (r.ok) setTimeout(function(){ location.reload(); }, 800);\n\
-  } catch(e) {\n\
-    if (out) { out.style.color='red'; out.textContent='Request failed: '+e; }\n\
+\n\
+async function vpnImport(btn){\n\
+  var out=document.getElementById('vpn-import-result');\n\
+  var name=document.getElementById('vpn-name').value.trim();\n\
+  var config=document.getElementById('vpn-import-text').value.trim();\n\
+  if(!name||!config){out.style.color='red';out.textContent='Заполните имя и конфиг';return;}\n\
+  btn.disabled=true;out.style.color='';out.textContent='Импорт…';\n\
+  try{\n\
+    var r=await fetch('/api/vpn',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,config})});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';out.textContent='Добавлен ✓';setTimeout(function(){location.reload();},700);}\n\
+    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+  btn.disabled=false;\n\
+}\n\
+\n\
+async function vpnAct(url,btn){\n\
+  var parts=url.split('/');var name=parts[parts.length-2];\n\
+  var out=document.getElementById('vpn-result-'+name);\n\
+  btn.disabled=true;\n\
+  if(out){out.style.color='';out.textContent='…';}\n\
+  try{\n\
+    var r=await fetch(url,{method:'POST'});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){if(out)out.textContent='';setTimeout(function(){location.reload();},600);}\n\
+    else{if(out){out.style.color='red';out.textContent=j.error||r.statusText;}}\n\
+  }catch(e){\n\
+    if(out){out.style.color='red';out.textContent='Сбой: '+e;}\n\
   }\n\
-  btn.disabled = false;\n\
+  btn.disabled=false;\n\
+}\n\
+\n\
+async function bypassSave(entries){\n\
+  var out=document.getElementById('bypass-result');\n\
+  try{\n\
+    var r=await fetch('/api/vpn/bypass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries:entries})});\n\
+    if(r.ok){out.style.color='green';out.textContent='Сохранено ✓';setTimeout(function(){out.textContent='';},2000);}\n\
+    else{var j={};try{j=await r.json();}catch(e){}out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+}\n\
+\n\
+function bypassAdd(){\n\
+  var inp=document.getElementById('bypass-input');\n\
+  var val=inp.value.trim();\n\
+  if(!val)return;\n\
+  if(_bypassEntries.indexOf(val)>=0){inp.value='';return;}\n\
+  _bypassEntries.push(val);\n\
+  inp.value='';\n\
+  bypassSave(_bypassEntries);\n\
+  var list=document.getElementById('bypass-list');\n\
+  var empties=list.querySelectorAll('.empty');\n\
+  empties.forEach(function(e){e.remove();});\n\
+  var div=document.createElement('div');\n\
+  div.style.cssText='display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem';\n\
+  div.innerHTML='<code style=\"flex:1;font-size:.85rem\">'+val+'</code>'\n\
+    +'<button class=\"btn btn--ghost btn--sm\" onclick=\"bypassRemove(this,\\''+val+'\\')\" >✕</button>';\n\
+  list.appendChild(div);\n\
+}\n\
+\n\
+function bypassRemove(btn,entry){\n\
+  _bypassEntries=_bypassEntries.filter(function(e){return e!==entry;});\n\
+  btn.parentElement.remove();\n\
+  bypassSave(_bypassEntries);\n\
 }\n\
 </script>\n";
 

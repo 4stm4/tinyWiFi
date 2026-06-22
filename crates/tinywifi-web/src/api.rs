@@ -9,11 +9,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use tinywifi_core::{
-    apply_wan, discard_backup, import_tunnel, leases::LeasesReport, revert, scan_tunnels,
-    service_restart, service_status, stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp,
-    update_wifi, wan_candidates, wan_status, AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig,
-    DhcpSettings, DhcpUpdateError, HostapdConf, SystemStatus, WanConfig, WanMode, WanStatus,
-    WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
+    apply_wan, discard_backup, import_tunnel, leases::LeasesReport, load_bypass_list, revert,
+    save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp, stage_wifi,
+    tunnel_down, tunnel_up, update_dhcp, update_wifi, wan_candidates, wan_status, AutoRevert,
+    AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, HostapdConf,
+    SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -272,6 +272,23 @@ fn find_tunnel<'a>(tunnels: &'a [AwgTunnel], name: &str) -> Result<&'a AwgTunnel
         .iter()
         .find(|t| t.name == name)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("tunnel '{name}' not found")))
+}
+
+// ── VPN bypass list ───────────────────────────────────────────────────────────
+
+pub async fn vpn_bypass_get() -> Json<Vec<String>> {
+    Json(load_bypass_list())
+}
+
+#[derive(serde::Deserialize)]
+pub struct BypassBody {
+    pub entries: Vec<String>,
+}
+
+pub async fn vpn_bypass_post(Json(body): Json<BypassBody>) -> Result<Json<Value>, ApiError> {
+    save_bypass_list(&body.entries)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(ok())
 }
 
 fn wifi_error(e: WifiError) -> ApiError {

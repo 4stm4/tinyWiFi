@@ -42,6 +42,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/vpn", get(api::vpn_list).post(api::vpn_import))
         .route("/api/vpn/:name/up", post(api::vpn_up))
         .route("/api/vpn/:name/down", post(api::vpn_down))
+        .route("/api/vpn/bypass", get(api::vpn_bypass_get).post(api::vpn_bypass_post))
         .route("/api/status", get(api::status))
         .route("/api/wifi", get(api::wifi_get).post(api::wifi_post))
         .route("/api/wifi/confirm", post(api::wifi_confirm))

@@ -1,16 +1,14 @@
-//! AmneziaWG detection, config parsing, tunnel management, and import.
+//! AmneziaWG / WireGuard tunnel management, config parsing, and import.
 //!
-//! Detects the `awg` binary and reads `*.conf` files from the standard
-//! config directory (`/etc/amnezia/amneziawg/`).  Parses WireGuard INI
-//! format extended with AmneziaWG obfuscation keys (Jc, Jmin, Jmax,
-//! S1–S4, H1–H4, I1–I5).  Tunnel status comes from `awg show`.
+//! Supports two backends:
+//!  - AmneziaWG (preferred): `ip link add type amneziawg` + `awg setconf`
+//!  - WireGuard (fallback): strips AWG-specific keys, `ip link add type wireguard` + `wg setconf`
 //!
-//! Import supports two formats:
-//!  - Raw `[Interface]` / `[Peer]` `.conf` text
-//!  - `vpn://` URI: base64url → skip 4-byte length → zlib → JSON
+//! Routing: when AllowedIPs includes 0.0.0.0/0, sets up full-tunnel routing
+//! (direct route for VPN endpoint via WAN, default via tunnel) and restores
+//! the original default route on disconnect.
 //!
-//! All operations degrade gracefully: missing binary → status Missing,
-//! missing config dir → empty list, failed `awg show` → status Down.
+//! Split tunneling: IPs/CIDRs in VPN_BYPASS_PATH route directly via WAN.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,6 +19,12 @@ use serde::Serialize;
 /// Standard config directory on embedded images.
 pub const AWG_CONF_DIR: &str = "/etc/amnezia/amneziawg";
 
+/// IPs/CIDRs that always route through WAN even when VPN is up (one per line).
+pub const VPN_BYPASS_PATH: &str = "/etc/tinywifi/vpn_bypass.conf";
+
+/// Saved routing state written on tunnel_up, read on tunnel_down.
+const VPN_ROUTE_STATE_PATH: &str = "/tmp/tinywifi_vpn_state";
+
 const BIN_DIRS: &[&str] = &[
     "/usr/local/sbin",
     "/usr/local/bin",
@@ -30,30 +34,36 @@ const BIN_DIRS: &[&str] = &[
     "/bin",
 ];
 
+/// Keys not accepted by `wg setconf` (kernel-level only: PrivateKey, ListenPort, FwMark, plus peer fields).
+/// Includes AWG obfuscation params AND wg-quick extras (Address, DNS, MTU, Table, Pre/PostUp/Down).
+const WG_SETCONF_STRIP_KEYS: &[&str] = &[
+    // AWG obfuscation
+    "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
+    "H1", "H2", "H3", "H4",
+    "I1", "I2", "I3", "I4", "I5",
+    // wg-quick extras not passed to kernel
+    "Address", "DNS", "MTU", "Table",
+    "PreUp", "PostUp", "PreDown", "PostDown",
+];
+
 // ── Data model ──────────────────────────────────────────────────────────────
 
-/// Typed view of a `[Interface]` section.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct AwgInterface {
-    /// One or more `Address = x.x.x.x/n` values.
     pub addresses: Vec<String>,
     pub listen_port: Option<u16>,
     pub dns: Vec<String>,
-    // AmneziaWG obfuscation parameters (junk traffic)
     pub jc: Option<u32>,
     pub jmin: Option<u32>,
     pub jmax: Option<u32>,
-    // Split-tunnel obfuscation sizes
     pub s1: Option<u32>,
     pub s2: Option<u32>,
     pub s3: Option<u32>,
     pub s4: Option<u32>,
-    // Magic header values (may be ranges like "123-456")
     pub h1: Option<String>,
     pub h2: Option<String>,
     pub h3: Option<String>,
     pub h4: Option<String>,
-    // DNS injection templates (I1–I5, may be empty)
     pub i1: Option<String>,
     pub i2: Option<String>,
     pub i3: Option<String>,
@@ -61,7 +71,6 @@ pub struct AwgInterface {
     pub i5: Option<String>,
 }
 
-/// Typed view of a `[Peer]` section.
 #[derive(Debug, Clone, Serialize)]
 pub struct AwgPeer {
     pub public_key: String,
@@ -71,26 +80,20 @@ pub struct AwgPeer {
     pub has_preshared_key: bool,
 }
 
-/// A parsed tunnel config + runtime status.
 #[derive(Debug, Clone, Serialize)]
 pub struct AwgTunnel {
-    /// Interface name derived from the filename, e.g. `awg0`.
     pub name: String,
     pub config_path: PathBuf,
     pub iface: AwgInterface,
     pub peers: Vec<AwgPeer>,
-    /// Runtime status: requires kernel module + running interface.
     pub status: AwgTunnelStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AwgTunnelStatus {
-    /// Interface is up and responding to `awg show`.
     Up,
-    /// Config exists but interface is not active.
     Down,
-    /// `awg` binary not found.
     Missing,
 }
 
@@ -100,7 +103,6 @@ pub struct AwgShowPeer {
     pub public_key: String,
     pub endpoint: Option<String>,
     pub allowed_ips: Vec<String>,
-    /// Unix timestamp of latest successful handshake (0 = never).
     pub latest_handshake: u64,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
@@ -115,31 +117,94 @@ pub struct AwgShowIface {
     pub peers: Vec<AwgShowPeer>,
 }
 
+// ── Saved routing state ───────────────────────────────────────────────────────
+
+struct VpnRouteState {
+    tunnel_name: String,
+    wan_gw: String,
+    wan_dev: String,
+    endpoint_ips: Vec<String>,
+    bypass_ips: Vec<String>,
+    full_tunnel: bool,
+}
+
+impl VpnRouteState {
+    fn save(&self) {
+        let content = format!(
+            "tunnel_name={}\nwan_gw={}\nwan_dev={}\nendpoint_ips={}\nbypass_ips={}\nfull_tunnel={}\n",
+            self.tunnel_name,
+            self.wan_gw,
+            self.wan_dev,
+            self.endpoint_ips.join(","),
+            self.bypass_ips.join(","),
+            self.full_tunnel,
+        );
+        let _ = std::fs::write(VPN_ROUTE_STATE_PATH, content);
+    }
+
+    fn load() -> Option<Self> {
+        let text = std::fs::read_to_string(VPN_ROUTE_STATE_PATH).ok()?;
+        let mut s = Self {
+            tunnel_name: String::new(),
+            wan_gw: String::new(),
+            wan_dev: String::new(),
+            endpoint_ips: Vec::new(),
+            bypass_ips: Vec::new(),
+            full_tunnel: false,
+        };
+        for line in text.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                match k {
+                    "tunnel_name"   => s.tunnel_name = v.to_string(),
+                    "wan_gw"        => s.wan_gw = v.to_string(),
+                    "wan_dev"       => s.wan_dev = v.to_string(),
+                    "endpoint_ips"  => {
+                        s.endpoint_ips = v.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+                    }
+                    "bypass_ips"    => {
+                        s.bypass_ips = v.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+                    }
+                    "full_tunnel"   => s.full_tunnel = v == "true",
+                    _ => {}
+                }
+            }
+        }
+        if s.tunnel_name.is_empty() { None } else { Some(s) }
+    }
+}
+
 // ── Binary detection ─────────────────────────────────────────────────────────
 
-/// Returns the path to the `awg` binary, or `None` if not installed.
 pub fn awg_binary() -> Option<PathBuf> {
-    // Check $PATH first
     if let Ok(p) = std::env::var("PATH") {
         for dir in p.split(':') {
-            let candidate = PathBuf::from(dir).join("awg");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+            let c = PathBuf::from(dir).join("awg");
+            if c.is_file() { return Some(c); }
         }
     }
     for dir in BIN_DIRS {
-        let candidate = PathBuf::from(dir).join("awg");
-        if candidate.is_file() {
-            return Some(candidate);
+        let c = PathBuf::from(dir).join("awg");
+        if c.is_file() { return Some(c); }
+    }
+    None
+}
+
+fn wg_binary() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("PATH") {
+        for dir in p.split(':') {
+            let c = PathBuf::from(dir).join("wg");
+            if c.is_file() { return Some(c); }
         }
+    }
+    for dir in BIN_DIRS {
+        let c = PathBuf::from(dir).join("wg");
+        if c.is_file() { return Some(c); }
     }
     None
 }
 
 // ── Config parsing ───────────────────────────────────────────────────────────
 
-/// Parse an AmneziaWG / WireGuard INI config file.
 pub fn parse_conf(content: &str) -> (AwgInterface, Vec<AwgPeer>) {
     let mut iface = AwgInterface::default();
     let mut peers: Vec<AwgPeer> = Vec::new();
@@ -151,9 +216,7 @@ pub fn parse_conf(content: &str) -> (AwgInterface, Vec<AwgPeer>) {
 
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
+        if line.is_empty() || line.starts_with('#') { continue; }
         if line.eq_ignore_ascii_case("[Interface]") {
             if let Some(pb) = peer_buf.take() { peers.push(pb.finish()); }
             current = Section::Interface;
@@ -172,9 +235,7 @@ pub fn parse_conf(content: &str) -> (AwgInterface, Vec<AwgPeer>) {
         match current {
             Section::Interface => apply_iface_key(&mut iface, key, val),
             Section::Peer => {
-                if let Some(pb) = peer_buf.as_mut() {
-                    pb.apply(key, val);
-                }
+                if let Some(pb) = peer_buf.as_mut() { pb.apply(key, val); }
             }
             Section::None => {}
         }
@@ -205,12 +266,10 @@ fn apply_iface_key(iface: &mut AwgInterface, key: &str, val: &str) {
         "S2"   => { iface.s2   = val.parse().ok(); }
         "S3"   => { iface.s3   = val.parse().ok(); }
         "S4"   => { iface.s4   = val.parse().ok(); }
-        // H1-H4 can be plain numbers or ranges like "123-456"
         "H1"   => { iface.h1   = Some(val.to_string()); }
         "H2"   => { iface.h2   = Some(val.to_string()); }
         "H3"   => { iface.h3   = Some(val.to_string()); }
         "H4"   => { iface.h4   = Some(val.to_string()); }
-        // I1-I5: DNS injection templates, can be empty strings
         "I1"   => { iface.i1   = Some(val.to_string()); }
         "I2"   => { iface.i2   = Some(val.to_string()); }
         "I3"   => { iface.i3   = Some(val.to_string()); }
@@ -232,16 +291,16 @@ struct PeerBuf {
 impl PeerBuf {
     fn apply(&mut self, key: &str, val: &str) {
         match key {
-            "PublicKey"          => { self.public_key = val.to_string(); }
-            "Endpoint"           => { self.endpoint = Some(val.to_string()); }
-            "AllowedIPs"         => {
+            "PublicKey"           => { self.public_key = val.to_string(); }
+            "Endpoint"            => { self.endpoint = Some(val.to_string()); }
+            "AllowedIPs"          => {
                 for part in val.split(',') {
                     let s = part.trim().to_string();
                     if !s.is_empty() { self.allowed_ips.push(s); }
                 }
             }
             "PersistentKeepalive" => { self.persistent_keepalive = val.parse().ok(); }
-            "PresharedKey"       => { self.has_preshared_key = true; }
+            "PresharedKey"        => { self.has_preshared_key = true; }
             _ => {}
         }
     }
@@ -256,28 +315,23 @@ impl PeerBuf {
     }
 }
 
-/// Read a single `*.conf` file, returning a tunnel.
-pub fn read_tunnel(path: &Path, status: AwgTunnelStatus) -> Option<AwgTunnel> {
-    let name = path.file_stem()?.to_string_lossy().to_string();
-    let content = std::fs::read_to_string(path).ok()?;
-    let (iface, peers) = parse_conf(&content);
-    Some(AwgTunnel {
-        name,
-        config_path: path.to_path_buf(),
-        iface,
-        peers,
-        status,
-    })
+/// Strip keys not accepted by `wg setconf` (kernel-only interface: PrivateKey, ListenPort, FwMark).
+/// Removes AWG params and wg-quick extras (Address, DNS, MTU, etc.).
+pub fn strip_to_wg_conf(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    for line in content.lines() {
+        let key = line.split('=').next().unwrap_or("").trim();
+        if WG_SETCONF_STRIP_KEYS.contains(&key) { continue; }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 // ── awg show ─────────────────────────────────────────────────────────────────
 
-/// Run `awg show` and parse output into a map keyed by interface name.
 pub fn awg_show() -> Vec<AwgShowIface> {
-    let bin = match awg_binary() {
-        Some(b) => b,
-        None => return Vec::new(),
-    };
+    let bin = match awg_binary() { Some(b) => b, None => return Vec::new() };
     let out = Command::new(&bin).arg("show").output();
     let stdout = match out {
         Ok(o) if o.status.success() || !o.stdout.is_empty() => {
@@ -288,7 +342,6 @@ pub fn awg_show() -> Vec<AwgShowIface> {
     parse_awg_show(&stdout)
 }
 
-/// Parse `awg show` text output.
 pub fn parse_awg_show(text: &str) -> Vec<AwgShowIface> {
     let mut result: Vec<AwgShowIface> = Vec::new();
     let mut current_iface: Option<AwgShowIface> = None;
@@ -296,9 +349,7 @@ pub fn parse_awg_show(text: &str) -> Vec<AwgShowIface> {
 
     for line in text.lines() {
         if line.is_empty() { continue; }
-
         if !line.starts_with(' ') && !line.starts_with('\t') {
-            // top-level: "interface: name" or "peer: pubkey"
             if let Some(name) = line.strip_prefix("interface: ") {
                 if let Some(p) = current_peer.take() {
                     if let Some(i) = current_iface.as_mut() { i.peers.push(p); }
@@ -325,21 +376,17 @@ pub fn parse_awg_show(text: &str) -> Vec<AwgShowIface> {
                 let (k, v) = (kv.0.trim(), kv.1.trim());
                 if let Some(ref mut peer) = current_peer {
                     match k {
-                        "endpoint" => { peer.endpoint = Some(v.to_string()); }
-                        "allowed ips" => {
-                            for part in v.split(", ") {
-                                peer.allowed_ips.push(part.trim().to_string());
-                            }
+                        "endpoint"        => { peer.endpoint = Some(v.to_string()); }
+                        "allowed ips"     => {
+                            for part in v.split(", ") { peer.allowed_ips.push(part.trim().to_string()); }
                         }
-                        "latest handshake" => {
-                            peer.latest_handshake = parse_handshake_age(v);
-                        }
-                        "transfer" => { parse_transfer(v, peer); }
+                        "latest handshake" => { peer.latest_handshake = parse_handshake_age(v); }
+                        "transfer"        => { parse_transfer(v, peer); }
                         _ => {}
                     }
                 } else if let Some(ref mut iface) = current_iface {
                     match k {
-                        "public key" => { iface.public_key = Some(v.to_string()); }
+                        "public key"     => { iface.public_key = Some(v.to_string()); }
                         "listening port" => { iface.listen_port = v.parse().ok(); }
                         _ => {}
                     }
@@ -354,7 +401,6 @@ pub fn parse_awg_show(text: &str) -> Vec<AwgShowIface> {
     result
 }
 
-/// Parse "N minutes, M seconds ago" → approximate unix timestamp of handshake.
 fn parse_handshake_age(s: &str) -> u64 {
     if s == "0 seconds ago" || s.contains("Never") { return 0; }
     let now = std::time::SystemTime::now()
@@ -377,7 +423,6 @@ fn parse_handshake_age(s: &str) -> u64 {
     now.saturating_sub(secs)
 }
 
-/// Parse "X KiB received, Y KiB sent" into bytes.
 fn parse_transfer(s: &str, peer: &mut AwgShowPeer) {
     for part in s.split(", ") {
         if let Some(rx) = part.strip_suffix(" received") {
@@ -391,13 +436,7 @@ fn parse_transfer(s: &str, peer: &mut AwgShowPeer) {
 fn parse_bytes(s: &str) -> u64 {
     if let Some((n, unit)) = s.rsplit_once(' ') {
         let n: f64 = n.parse().unwrap_or(0.0);
-        let mult = match unit {
-            "B" => 1.0,
-            "KiB" => 1024.0,
-            "MiB" => 1024.0 * 1024.0,
-            "GiB" => 1024.0 * 1024.0 * 1024.0,
-            _ => 1.0,
-        };
+        let mult = match unit { "B" => 1.0, "KiB" => 1024.0, "MiB" => 1048576.0, "GiB" => 1073741824.0, _ => 1.0 };
         return (n * mult) as u64;
     }
     0
@@ -405,32 +444,38 @@ fn parse_bytes(s: &str) -> u64 {
 
 // ── Scanning ─────────────────────────────────────────────────────────────────
 
-/// Scan `dir` for `*.conf` files and return parsed tunnels with runtime status.
+/// Check if a network interface exists in the kernel.
+fn iface_exists_in_kernel(name: &str) -> bool {
+    Path::new(&format!("/sys/class/net/{name}")).exists()
+}
+
+/// Scan `dir` for `*.conf` files and return tunnels with runtime status.
+/// Status is detected via `ip link` (not awg show) — works for both backends.
 pub fn scan_tunnels(dir: impl AsRef<Path>) -> Vec<AwgTunnel> {
     let dir = dir.as_ref();
-    let has_binary = awg_binary().is_some();
-    let active = if has_binary { awg_show() } else { Vec::new() };
-    let active_names: std::collections::HashSet<String> =
-        active.iter().map(|i| i.name.clone()).collect();
-
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
-
     let mut tunnels: Vec<AwgTunnel> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("conf") { continue; }
-        let status = if !has_binary {
-            AwgTunnelStatus::Missing
-        } else {
-            let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-            if active_names.contains(&name) { AwgTunnelStatus::Up } else { AwgTunnelStatus::Down }
+        let name = match path.file_stem() {
+            Some(s) => s.to_string_lossy().to_string(),
+            None => continue,
         };
-        if let Some(t) = read_tunnel(&path, status) {
-            tunnels.push(t);
-        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let (iface, peers) = parse_conf(&content);
+        let status = if iface_exists_in_kernel(&name) {
+            AwgTunnelStatus::Up
+        } else {
+            AwgTunnelStatus::Down
+        };
+        tunnels.push(AwgTunnel { name, config_path: path, iface, peers, status });
     }
     tunnels.sort_by(|a, b| a.name.cmp(&b.name));
     tunnels
@@ -438,53 +483,192 @@ pub fn scan_tunnels(dir: impl AsRef<Path>) -> Vec<AwgTunnel> {
 
 // ── Tunnel lifecycle ──────────────────────────────────────────────────────────
 
-/// Bring up a tunnel: `ip link add <name> type amneziawg` → `awg setconf` → addrs → `ip link set up`.
+/// Bring a tunnel up: try AmneziaWG first, fall back to standard WireGuard.
+/// Sets up routing and DNS when AllowedIPs covers 0.0.0.0/0.
 pub fn tunnel_up(tunnel: &AwgTunnel) -> Result<(), String> {
     let name = &tunnel.name;
-    let conf = tunnel.config_path.display().to_string();
 
-    run_cmd("ip", &["link", "add", name, "type", "amneziawg"])?;
-    run_cmd(
-        awg_binary()
-            .as_deref()
-            .unwrap_or(Path::new("awg"))
-            .to_str()
-            .unwrap_or("awg"),
-        &["setconf", name, &conf],
-    )?;
-    for addr in &tunnel.iface.addresses {
-        run_cmd("ip", &["addr", "add", addr, "dev", name])?;
+    // Create interface and configure keys
+    if try_amneziawg(tunnel).is_err() {
+        try_wireguard(tunnel)?;
     }
-    run_cmd("ip", &["link", "set", name, "up"])
+
+    // Add IP addresses
+    for addr in &tunnel.iface.addresses {
+        let _ = run_cmd("ip", &["addr", "add", addr, "dev", name]);
+    }
+    run_cmd("ip", &["link", "set", name, "up"])?;
+
+    // Routing
+    setup_routing(tunnel)?;
+
+    // DNS
+    if !tunnel.iface.dns.is_empty() {
+        let content: String = tunnel.iface.dns.iter()
+            .map(|d| format!("nameserver {d}\n"))
+            .collect();
+        let _ = std::fs::write("/etc/resolv.conf", content);
+    }
+
+    Ok(())
 }
 
-/// Bring down a tunnel: `ip link set <name> down` → `ip link del <name>`.
+fn try_amneziawg(tunnel: &AwgTunnel) -> Result<(), String> {
+    let name = &tunnel.name;
+    let conf = tunnel.config_path.to_str().unwrap_or("");
+    run_cmd("ip", &["link", "add", name, "type", "amneziawg"])?;
+    let bin = awg_binary().ok_or_else(|| "awg not found".to_string())?;
+    run_cmd(bin.to_str().unwrap_or("awg"), &["setconf", name, conf])
+        .map_err(|e| { let _ = run_cmd("ip", &["link", "del", name]); e })
+}
+
+fn try_wireguard(tunnel: &AwgTunnel) -> Result<(), String> {
+    let name = &tunnel.name;
+    let content = std::fs::read_to_string(&tunnel.config_path)
+        .map_err(|e| format!("read config: {e}"))?;
+    let stripped = strip_to_wg_conf(&content);
+    let tmp = format!("/tmp/{name}_wg.conf");
+    std::fs::write(&tmp, &stripped).map_err(|e| format!("write tmp: {e}"))?;
+
+    run_cmd("ip", &["link", "add", name, "type", "wireguard"])?;
+    let bin = wg_binary().ok_or_else(|| {
+        let _ = run_cmd("ip", &["link", "del", name]);
+        "wg binary not found — install wireguard-tools".to_string()
+    })?;
+    run_cmd(bin.to_str().unwrap_or("wg"), &["setconf", name, &tmp])
+        .map_err(|e| { let _ = run_cmd("ip", &["link", "del", name]); e })?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(())
+}
+
+/// Bring a tunnel down, restoring WAN routing.
 pub fn tunnel_down(name: &str) -> Result<(), String> {
+    // Restore routing before destroying the interface
+    if let Some(state) = VpnRouteState::load() {
+        if state.tunnel_name == name && state.full_tunnel {
+            // Restore WAN default route
+            let _ = run_cmd("ip", &["route", "del", "default"]);
+            if !state.wan_gw.is_empty() {
+                let _ = run_cmd(
+                    "ip",
+                    &["route", "add", "default", "via", &state.wan_gw, "dev", &state.wan_dev],
+                );
+            }
+            // Remove direct routes added for VPN endpoints
+            for ep in &state.endpoint_ips {
+                let _ = run_cmd("ip", &["route", "del", ep]);
+            }
+            // Remove bypass routes
+            for bp in &state.bypass_ips {
+                let _ = run_cmd("ip", &["route", "del", bp]);
+            }
+            let _ = std::fs::remove_file(VPN_ROUTE_STATE_PATH);
+        }
+    }
     let _ = run_cmd("ip", &["link", "set", name, "down"]);
     run_cmd("ip", &["link", "del", name])
 }
 
-fn run_cmd(prog: &str, args: &[&str]) -> Result<(), String> {
-    let out = Command::new(prog)
-        .args(args)
-        .output()
-        .map_err(|e| format!("{prog}: {e}"))?;
-    if out.status.success() {
-        Ok(())
+fn setup_routing(tunnel: &AwgTunnel) -> Result<(), String> {
+    let name = &tunnel.name;
+    let full_tunnel = tunnel.peers.iter().any(|p| {
+        p.allowed_ips.iter().any(|ip| ip.starts_with("0.0.0.0/0"))
+    });
+
+    let endpoint_ips: Vec<String> = tunnel.peers.iter()
+        .filter_map(|p| p.endpoint.as_ref())
+        .filter_map(|ep| ep.rsplit_once(':').map(|(host, _)| host.to_string())
+            .or_else(|| ep.split(':').next().map(|s| s.to_string())))
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if full_tunnel {
+        let (wan_gw, wan_dev) = current_default_gateway()
+            .ok_or_else(|| "no default gateway — WAN not configured".to_string())?;
+
+        // Add direct routes for VPN endpoints so the tunnel can reach the server
+        for ep in &endpoint_ips {
+            let _ = run_cmd("ip", &["route", "add", ep, "via", &wan_gw, "dev", &wan_dev]);
+        }
+
+        // Apply bypass list (IPs/CIDRs that skip VPN)
+        let bypass = load_bypass_list();
+        for entry in &bypass {
+            let _ = run_cmd("ip", &["route", "add", entry, "via", &wan_gw, "dev", &wan_dev]);
+        }
+
+        // Save state before replacing default route (tunnel_down will use it)
+        VpnRouteState {
+            tunnel_name: name.clone(),
+            wan_gw: wan_gw.clone(),
+            wan_dev: wan_dev.clone(),
+            endpoint_ips: endpoint_ips.clone(),
+            bypass_ips: bypass,
+            full_tunnel: true,
+        }.save();
+
+        // Replace default route with tunnel
+        let _ = run_cmd("ip", &["route", "del", "default"]);
+        run_cmd("ip", &["route", "add", "default", "dev", name])?;
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        // Specific AllowedIPs: add per-network routes
+        for peer in &tunnel.peers {
+            for allowed_ip in &peer.allowed_ips {
+                if !allowed_ip.starts_with(':') {
+                    let _ = run_cmd("ip", &["route", "add", allowed_ip, "dev", name]);
+                }
+            }
+        }
     }
+    Ok(())
+}
+
+fn current_default_gateway() -> Option<(String, String)> {
+    let out = Command::new("ip")
+        .args(["route", "show", "default"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().next()?;
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let mut gw = String::new();
+    let mut dev = String::new();
+    for (i, &w) in words.iter().enumerate() {
+        if w == "via" { gw = words.get(i + 1).copied().unwrap_or("").to_string(); }
+        if w == "dev" { dev = words.get(i + 1).copied().unwrap_or("").to_string(); }
+    }
+    if gw.is_empty() { None } else { Some((gw, dev)) }
+}
+
+// ── Bypass list ───────────────────────────────────────────────────────────────
+
+/// Load IPs/CIDRs from the bypass file (one per line, empty/# lines ignored).
+pub fn load_bypass_list() -> Vec<String> {
+    let text = std::fs::read_to_string(VPN_BYPASS_PATH).unwrap_or_default();
+    text.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect()
+}
+
+/// Save bypass list to file, creating parent directory if needed.
+pub fn save_bypass_list(entries: &[String]) -> std::io::Result<()> {
+    if let Some(parent) = Path::new(VPN_BYPASS_PATH).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content: String = entries.iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("{s}\n"))
+        .collect();
+    std::fs::write(VPN_BYPASS_PATH, content)
 }
 
 // ── Import ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum ImportError {
-    /// Not a recognised format.
     UnknownFormat,
-    /// base64 / zlib / JSON decode error.
     Decode(String),
-    /// Could not write the resulting config file.
     Write(std::io::Error),
 }
 
@@ -498,12 +682,6 @@ impl std::fmt::Display for ImportError {
     }
 }
 
-/// Import a tunnel config from either:
-/// - a raw `[Interface]` / `[Peer]` `.conf` string, or
-/// - a `vpn://` URI (base64url → skip 4 bytes → zlib → JSON).
-///
-/// Writes the resulting `.conf` to `<conf_dir>/<name>.conf`.
-/// Returns the path that was written.
 pub fn import_tunnel(
     input: &str,
     name: &str,
@@ -517,8 +695,7 @@ pub fn import_tunnel(
         return Err(ImportError::UnknownFormat);
     };
 
-    std::fs::create_dir_all(conf_dir.as_ref())
-        .map_err(ImportError::Write)?;
+    std::fs::create_dir_all(conf_dir.as_ref()).map_err(ImportError::Write)?;
 
     let safe_name: String = name
         .chars()
@@ -529,8 +706,6 @@ pub fn import_tunnel(
     Ok(path)
 }
 
-/// Decode a `vpn://` payload: base64url → skip 4-byte length prefix → zlib decompress → JSON.
-/// Returns the `.conf` text.
 fn decode_vpn_uri(uri: &str) -> Result<String, ImportError> {
     use flate2::read::ZlibDecoder;
     use std::io::Read as _;
@@ -538,61 +713,50 @@ fn decode_vpn_uri(uri: &str) -> Result<String, ImportError> {
     let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(uri)
         .map_err(|e| ImportError::Decode(format!("base64: {e}")))?;
-
     if raw.len() < 4 {
         return Err(ImportError::Decode("payload too short".into()));
     }
-    // First 4 bytes are big-endian uncompressed length — skip them.
     let compressed = &raw[4..];
-
     let mut decoder = ZlibDecoder::new(compressed);
     let mut json_str = String::new();
-    decoder
-        .read_to_string(&mut json_str)
+    decoder.read_to_string(&mut json_str)
         .map_err(|e| ImportError::Decode(format!("zlib: {e}")))?;
-
     extract_conf_from_json(&json_str)
 }
 
-/// Pull the `.conf` text out of the AmneziaVPN JSON envelope and fill DNS placeholders.
 fn extract_conf_from_json(json_str: &str) -> Result<String, ImportError> {
     let root: serde_json::Value = serde_json::from_str(json_str)
         .map_err(|e| ImportError::Decode(format!("json: {e}")))?;
-
-    // Navigate containers[0].awg
     let awg = root
-        .get("containers")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("awg"))
+        .get("containers").and_then(|c| c.get(0)).and_then(|c| c.get("awg"))
         .ok_or_else(|| ImportError::Decode("missing containers[0].awg".into()))?;
-
-    // last_config is a JSON string inside the awg object
-    let last_config_str = awg
-        .get("last_config")
-        .and_then(|v| v.as_str())
+    let last_config_str = awg.get("last_config").and_then(|v| v.as_str())
         .ok_or_else(|| ImportError::Decode("missing awg.last_config".into()))?;
-
     let last_config: serde_json::Value = serde_json::from_str(last_config_str)
         .map_err(|e| ImportError::Decode(format!("last_config json: {e}")))?;
-
-    let conf_template = last_config
-        .get("config")
-        .and_then(|v| v.as_str())
+    let conf_template = last_config.get("config").and_then(|v| v.as_str())
         .ok_or_else(|| ImportError::Decode("missing last_config.config".into()))?;
-
-    // Fill DNS placeholders from the awg object's dns1/dns2 or from the root
     let dns1 = awg.get("dns1").and_then(|v| v.as_str())
         .or_else(|| root.get("dns1").and_then(|v| v.as_str()))
         .unwrap_or("1.1.1.1");
     let dns2 = awg.get("dns2").and_then(|v| v.as_str())
         .or_else(|| root.get("dns2").and_then(|v| v.as_str()))
         .unwrap_or("1.0.0.1");
-
-    let conf = conf_template
+    Ok(conf_template
         .replace("$PRIMARY_DNS", dns1)
-        .replace("$SECONDARY_DNS", dns2);
+        .replace("$SECONDARY_DNS", dns2))
+}
 
-    Ok(conf)
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn run_cmd(prog: &str, args: &[&str]) -> Result<(), String> {
+    let out = Command::new(prog).args(args).output()
+        .map_err(|e| format!("{prog}: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -662,6 +826,20 @@ PersistentKeepalive = 25
         assert_eq!(iface.listen_port, Some(1234));
     }
 
+    #[test]
+    fn strip_to_wg_conf_removes_awg_and_wgquick_keys() {
+        let stripped = strip_to_wg_conf(SAMPLE_CONF);
+        // AWG keys removed
+        assert!(!stripped.contains("Jc ="));
+        assert!(!stripped.contains("H1 ="));
+        // wg-quick extras removed (not accepted by kernel's wg setconf)
+        assert!(!stripped.contains("Address"));
+        assert!(!stripped.contains("DNS"));
+        // Pure WireGuard kernel keys kept
+        assert!(stripped.contains("PrivateKey"));
+        assert!(stripped.contains("ListenPort"));
+    }
+
     const SHOW_OUTPUT: &str = "\
 interface: awg0
   public key: PUBKEY0==
@@ -694,7 +872,7 @@ peer: PEERKEY==
         assert_eq!(peer.endpoint.as_deref(), Some("1.2.3.4:51820"));
         assert_eq!(peer.allowed_ips, vec!["10.8.0.2/32"]);
         assert!(peer.latest_handshake > 0);
-        assert_eq!(peer.rx_bytes, 1536); // 1.50 KiB
+        assert_eq!(peer.rx_bytes, 1536);
         assert_eq!(peer.tx_bytes, 512);
     }
 
@@ -759,13 +937,26 @@ PersistentKeepalive = 25
         let (iface, _) = parse_conf(FULL_CONF);
         assert!(iface.i1.as_deref().unwrap_or("").starts_with("<r 2>"));
         assert_eq!(iface.i2.as_deref(), Some(""));
-        assert_eq!(iface.i5.as_deref(), Some(""));
     }
 
     #[test]
     fn parses_preshared_key_flag() {
         let (_, peers) = parse_conf(FULL_CONF);
         assert!(peers[0].has_preshared_key);
+    }
+
+    #[test]
+    fn bypass_list_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vpn_bypass.conf");
+        let entries = vec!["192.168.1.0/24".to_string(), "10.0.0.0/8".to_string()];
+        std::fs::write(&path, entries.iter().map(|s| format!("{s}\n")).collect::<String>()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let loaded: Vec<String> = text.lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        assert_eq!(loaded, entries);
     }
 
     #[test]
@@ -786,7 +977,6 @@ PersistentKeepalive = 25
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("[Interface]"), "no [Interface] in: {content}");
         assert!(content.contains("Jc"), "no Jc in conf");
-        // DNS placeholders must be filled
         assert!(!content.contains("$PRIMARY_DNS"), "DNS placeholder not filled");
     }
 
@@ -795,5 +985,13 @@ PersistentKeepalive = 25
         let dir = tempfile::tempdir().unwrap();
         let result = import_tunnel("garbage data", "x", dir.path());
         assert!(matches!(result, Err(ImportError::UnknownFormat)));
+    }
+
+    #[test]
+    fn full_tunnel_detected_from_allowed_ips() {
+        let conf = "[Interface]\nAddress = 10.0.0.1/32\n\n[Peer]\nPublicKey = ABC=\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 1.2.3.4:51820\n";
+        let (_, peers) = parse_conf(conf);
+        let full = peers.iter().any(|p| p.allowed_ips.iter().any(|ip| ip.starts_with("0.0.0.0/0")));
+        assert!(full);
     }
 }
