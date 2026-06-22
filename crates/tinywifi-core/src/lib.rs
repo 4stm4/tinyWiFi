@@ -18,9 +18,9 @@ pub mod status;
 pub mod wifi;
 
 pub use amnezia::{
-    awg_binary, parse_awg_show, parse_conf as parse_awg_conf, scan_tunnels,
+    awg_binary, import_tunnel, parse_awg_show, parse_conf as parse_awg_conf, scan_tunnels,
     tunnel_down, tunnel_up, AwgInterface, AwgPeer, AwgShowIface, AwgTunnel,
-    AwgTunnelStatus, AWG_CONF_DIR,
+    AwgTunnelStatus, ImportError, AWG_CONF_DIR,
 };
 pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};

@@ -9,10 +9,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use tinywifi_core::{
-    discard_backup, leases::LeasesReport, revert, scan_tunnels, service_restart, service_status,
-    stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp, update_wifi, AutoRevert,
-    AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, HostapdConf,
-    SystemStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
+    discard_backup, import_tunnel, leases::LeasesReport, revert, scan_tunnels, service_restart,
+    service_status, stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp, update_wifi,
+    AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError,
+    HostapdConf, SystemStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -196,6 +196,26 @@ pub async fn reboot() -> Result<Json<Value>, ApiError> {
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ))
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct VpnImportBody {
+    /// Tunnel name (e.g. "awg0"). Written as `<name>.conf`.
+    pub name: String,
+    /// Raw `[Interface]...` text or full `vpn://...` URI.
+    pub config: String,
+}
+
+pub async fn vpn_import(
+    Json(body): Json<VpnImportBody>,
+) -> Result<Json<Value>, ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "name is required"));
+    }
+    import_tunnel(&body.config, name, AWG_CONF_DIR)
+        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(ok())
 }
 
 pub async fn vpn_list(_st: State<AppState>) -> Json<Vec<AwgTunnel>> {

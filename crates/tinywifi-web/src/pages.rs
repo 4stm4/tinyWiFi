@@ -444,10 +444,10 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
                     t.iface.jmax.unwrap_or(0),
                     t.iface.s1.unwrap_or(0),
                     t.iface.s2.unwrap_or(0),
-                    t.iface.h1.unwrap_or(0),
-                    t.iface.h2.unwrap_or(0),
-                    t.iface.h3.unwrap_or(0),
-                    t.iface.h4.unwrap_or(0),
+                    t.iface.h1.as_deref().unwrap_or("—"),
+                    t.iface.h2.as_deref().unwrap_or("—"),
+                    t.iface.h3.as_deref().unwrap_or("—"),
+                    t.iface.h4.as_deref().unwrap_or("—"),
                 )
             } else {
                 "нет (стандартный WireGuard)".to_string()
@@ -517,6 +517,27 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
         }
     }
 
+    // Import form
+    body.push_str(
+        "<section class=\"card\" style=\"margin-top:1.5rem\">\
+         <div class=\"card__body\">\
+         <h2 style=\"margin:0 0 .75rem\">Добавить туннель</h2>\
+         <div class=\"form-grid\">\
+         <div class=\"field\"><label for=\"vpn-name\">Имя <span class=\"en\">name</span></label>\
+         <input id=\"vpn-name\" value=\"awg0\" maxlength=\"32\"><div class=\"hint\">имя файла, напр. awg0</div></div>\
+         </div>\
+         <div class=\"field field--full\" style=\"margin-top:.5rem\">\
+         <label for=\"vpn-import-text\">Конфиг <span class=\"en\">paste .conf or vpn://...</span></label>\
+         <textarea id=\"vpn-import-text\" rows=\"8\" \
+         style=\"width:100%;font-family:monospace;font-size:.8rem;resize:vertical;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:.5rem\" \
+         placeholder=\"[Interface]&#10;PrivateKey = ...&#10;&#10;или vpn://AAALR...\"></textarea>\
+         </div>\
+         <div class=\"form-actions\">\
+         <button class=\"btn btn--primary\" onclick=\"vpnImport(this)\">Импортировать</button>\
+         <span id=\"vpn-import-result\" class=\"note\" role=\"status\"></span>\
+         </div>\
+         </div></section>\n"
+    );
     body.push_str("<p><a href=\"/api/vpn\">/api/vpn</a></p>\n");
     body.push_str(VPN_SCRIPT);
 
@@ -525,6 +546,20 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
 
 const VPN_SCRIPT: &str = "\
 <script>\n\
+async function vpnImport(btn) {\n\
+  const out = document.getElementById('vpn-import-result');\n\
+  const name = document.getElementById('vpn-name').value.trim();\n\
+  const config = document.getElementById('vpn-import-text').value.trim();\n\
+  if (!name || !config) { out.style.color='red'; out.textContent='Заполните имя и конфиг'; return; }\n\
+  btn.disabled = true; out.style.color=''; out.textContent='Импорт…';\n\
+  try {\n\
+    const r = await fetch('/api/vpn', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, config})});\n\
+    let j = {}; try { j = await r.json(); } catch(e) {}\n\
+    if (r.ok) { out.style.color='green'; out.textContent='Импортировано ✓'; setTimeout(function(){ location.reload(); }, 900); }\n\
+    else { out.style.color='red'; out.textContent='Ошибка: ' + (j.error || r.statusText); }\n\
+  } catch(e) { out.style.color='red'; out.textContent='Сбой: '+e; }\n\
+  btn.disabled = false;\n\
+}\n\
 async function vpnAct(url, btn) {\n\
   const name = url.split('/')[3];\n\
   const out = document.getElementById('vpn-result-' + name);\n\

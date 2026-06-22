@@ -37,7 +37,7 @@ fn build_router(state: AppState) -> Router {
         .route("/leases", get(pages::leases))
         .route("/system", get(pages::system))
         .route("/vpn", get(pages::vpn))
-        .route("/api/vpn", get(api::vpn_list))
+        .route("/api/vpn", get(api::vpn_list).post(api::vpn_import))
         .route("/api/vpn/:name/up", post(api::vpn_up))
         .route("/api/vpn/:name/down", post(api::vpn_down))
         .route("/api/status", get(api::status))

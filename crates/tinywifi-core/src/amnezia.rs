@@ -1,9 +1,13 @@
-//! AmneziaWG detection, config parsing, and tunnel management.
+//! AmneziaWG detection, config parsing, tunnel management, and import.
 //!
 //! Detects the `awg` binary and reads `*.conf` files from the standard
 //! config directory (`/etc/amnezia/amneziawg/`).  Parses WireGuard INI
 //! format extended with AmneziaWG obfuscation keys (Jc, Jmin, Jmax,
-//! S1, S2, H1–H4).  Tunnel status comes from `awg show`.
+//! S1–S4, H1–H4, I1–I5).  Tunnel status comes from `awg show`.
+//!
+//! Import supports two formats:
+//!  - Raw `[Interface]` / `[Peer]` `.conf` text
+//!  - `vpn://` URI: base64url → skip 4-byte length → zlib → JSON
 //!
 //! All operations degrade gracefully: missing binary → status Missing,
 //! missing config dir → empty list, failed `awg show` → status Down.
@@ -11,6 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use base64::Engine as _;
 use serde::Serialize;
 
 /// Standard config directory on embedded images.
@@ -34,16 +39,26 @@ pub struct AwgInterface {
     pub addresses: Vec<String>,
     pub listen_port: Option<u16>,
     pub dns: Vec<String>,
-    // AmneziaWG obfuscation parameters
+    // AmneziaWG obfuscation parameters (junk traffic)
     pub jc: Option<u32>,
     pub jmin: Option<u32>,
     pub jmax: Option<u32>,
+    // Split-tunnel obfuscation sizes
     pub s1: Option<u32>,
     pub s2: Option<u32>,
-    pub h1: Option<u32>,
-    pub h2: Option<u32>,
-    pub h3: Option<u32>,
-    pub h4: Option<u32>,
+    pub s3: Option<u32>,
+    pub s4: Option<u32>,
+    // Magic header values (may be ranges like "123-456")
+    pub h1: Option<String>,
+    pub h2: Option<String>,
+    pub h3: Option<String>,
+    pub h4: Option<String>,
+    // DNS injection templates (I1–I5, may be empty)
+    pub i1: Option<String>,
+    pub i2: Option<String>,
+    pub i3: Option<String>,
+    pub i4: Option<String>,
+    pub i5: Option<String>,
 }
 
 /// Typed view of a `[Peer]` section.
@@ -188,10 +203,19 @@ fn apply_iface_key(iface: &mut AwgInterface, key: &str, val: &str) {
         "Jmax" => { iface.jmax = val.parse().ok(); }
         "S1"   => { iface.s1   = val.parse().ok(); }
         "S2"   => { iface.s2   = val.parse().ok(); }
-        "H1"   => { iface.h1   = val.parse().ok(); }
-        "H2"   => { iface.h2   = val.parse().ok(); }
-        "H3"   => { iface.h3   = val.parse().ok(); }
-        "H4"   => { iface.h4   = val.parse().ok(); }
+        "S3"   => { iface.s3   = val.parse().ok(); }
+        "S4"   => { iface.s4   = val.parse().ok(); }
+        // H1-H4 can be plain numbers or ranges like "123-456"
+        "H1"   => { iface.h1   = Some(val.to_string()); }
+        "H2"   => { iface.h2   = Some(val.to_string()); }
+        "H3"   => { iface.h3   = Some(val.to_string()); }
+        "H4"   => { iface.h4   = Some(val.to_string()); }
+        // I1-I5: DNS injection templates, can be empty strings
+        "I1"   => { iface.i1   = Some(val.to_string()); }
+        "I2"   => { iface.i2   = Some(val.to_string()); }
+        "I3"   => { iface.i3   = Some(val.to_string()); }
+        "I4"   => { iface.i4   = Some(val.to_string()); }
+        "I5"   => { iface.i5   = Some(val.to_string()); }
         _ => {}
     }
 }
@@ -452,6 +476,125 @@ fn run_cmd(prog: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
+// ── Import ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub enum ImportError {
+    /// Not a recognised format.
+    UnknownFormat,
+    /// base64 / zlib / JSON decode error.
+    Decode(String),
+    /// Could not write the resulting config file.
+    Write(std::io::Error),
+}
+
+impl std::fmt::Display for ImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImportError::UnknownFormat => write!(f, "unrecognised format (expected [Interface] or vpn://)"),
+            ImportError::Decode(e) => write!(f, "decode error: {e}"),
+            ImportError::Write(e) => write!(f, "write error: {e}"),
+        }
+    }
+}
+
+/// Import a tunnel config from either:
+/// - a raw `[Interface]` / `[Peer]` `.conf` string, or
+/// - a `vpn://` URI (base64url → skip 4 bytes → zlib → JSON).
+///
+/// Writes the resulting `.conf` to `<conf_dir>/<name>.conf`.
+/// Returns the path that was written.
+pub fn import_tunnel(
+    input: &str,
+    name: &str,
+    conf_dir: impl AsRef<Path>,
+) -> Result<PathBuf, ImportError> {
+    let conf_text = if input.trim_start().starts_with("[Interface]") {
+        input.to_string()
+    } else if let Some(uri) = input.trim().strip_prefix("vpn://") {
+        decode_vpn_uri(uri)?
+    } else {
+        return Err(ImportError::UnknownFormat);
+    };
+
+    std::fs::create_dir_all(conf_dir.as_ref())
+        .map_err(ImportError::Write)?;
+
+    let safe_name: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let path = conf_dir.as_ref().join(format!("{safe_name}.conf"));
+    std::fs::write(&path, &conf_text).map_err(ImportError::Write)?;
+    Ok(path)
+}
+
+/// Decode a `vpn://` payload: base64url → skip 4-byte length prefix → zlib decompress → JSON.
+/// Returns the `.conf` text.
+fn decode_vpn_uri(uri: &str) -> Result<String, ImportError> {
+    use flate2::read::ZlibDecoder;
+    use std::io::Read as _;
+
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(uri)
+        .map_err(|e| ImportError::Decode(format!("base64: {e}")))?;
+
+    if raw.len() < 4 {
+        return Err(ImportError::Decode("payload too short".into()));
+    }
+    // First 4 bytes are big-endian uncompressed length — skip them.
+    let compressed = &raw[4..];
+
+    let mut decoder = ZlibDecoder::new(compressed);
+    let mut json_str = String::new();
+    decoder
+        .read_to_string(&mut json_str)
+        .map_err(|e| ImportError::Decode(format!("zlib: {e}")))?;
+
+    extract_conf_from_json(&json_str)
+}
+
+/// Pull the `.conf` text out of the AmneziaVPN JSON envelope and fill DNS placeholders.
+fn extract_conf_from_json(json_str: &str) -> Result<String, ImportError> {
+    let root: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| ImportError::Decode(format!("json: {e}")))?;
+
+    // Navigate containers[0].awg
+    let awg = root
+        .get("containers")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("awg"))
+        .ok_or_else(|| ImportError::Decode("missing containers[0].awg".into()))?;
+
+    // last_config is a JSON string inside the awg object
+    let last_config_str = awg
+        .get("last_config")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ImportError::Decode("missing awg.last_config".into()))?;
+
+    let last_config: serde_json::Value = serde_json::from_str(last_config_str)
+        .map_err(|e| ImportError::Decode(format!("last_config json: {e}")))?;
+
+    let conf_template = last_config
+        .get("config")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ImportError::Decode("missing last_config.config".into()))?;
+
+    // Fill DNS placeholders from the awg object's dns1/dns2 or from the root
+    let dns1 = awg.get("dns1").and_then(|v| v.as_str())
+        .or_else(|| root.get("dns1").and_then(|v| v.as_str()))
+        .unwrap_or("1.1.1.1");
+    let dns2 = awg.get("dns2").and_then(|v| v.as_str())
+        .or_else(|| root.get("dns2").and_then(|v| v.as_str()))
+        .unwrap_or("1.0.0.1");
+
+    let conf = conf_template
+        .replace("$PRIMARY_DNS", dns1)
+        .replace("$SECONDARY_DNS", dns2);
+
+    Ok(conf)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -488,8 +631,8 @@ PersistentKeepalive = 25
         assert_eq!(iface.jmin, Some(40));
         assert_eq!(iface.jmax, Some(70));
         assert_eq!(iface.s1, Some(0));
-        assert_eq!(iface.h1, Some(1));
-        assert_eq!(iface.h4, Some(4));
+        assert_eq!(iface.h1.as_deref(), Some("1"));
+        assert_eq!(iface.h4.as_deref(), Some("4"));
     }
 
     #[test]
@@ -565,5 +708,92 @@ peer: PEERKEY==
         assert_eq!(parse_bytes("1.50 KiB"), 1536);
         assert_eq!(parse_bytes("512 B"), 512);
         assert_eq!(parse_bytes("1.00 MiB"), 1048576);
+    }
+
+    const FULL_CONF: &str = "\
+[Interface]
+PrivateKey = HD05E6Alo0+bCqe1R8sso7kXIZmcB8GGhoPJnESxts4=
+Address = 10.8.1.7/32
+DNS = 1.1.1.1, 1.0.0.1
+Jc = 5
+Jmin = 10
+Jmax = 50
+S1 = 64
+S2 = 50
+S3 = 33
+S4 = 6
+H1 = 644456937-947561569
+H2 = 1227333105-1274069595
+H3 = 2083103156-2109834062
+H4 = 2143087149-2147361817
+I1 = <r 2><b 0x858000>
+I2 =
+I3 =
+I4 =
+I5 =
+
+[Peer]
+PublicKey = yjSWAm97rHwDZL0yIOR3XmLxU33qyacMWObFkJSvKkQ=
+PresharedKey = VUgvZskXT51mo67krBdD5f6G9WjjxCP1jfUup3BH8Ks=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 156.67.62.126:46089
+PersistentKeepalive = 25
+";
+
+    #[test]
+    fn parses_s3_s4_fields() {
+        let (iface, _) = parse_conf(FULL_CONF);
+        assert_eq!(iface.s3, Some(33));
+        assert_eq!(iface.s4, Some(6));
+    }
+
+    #[test]
+    fn parses_h_as_range_string() {
+        let (iface, _) = parse_conf(FULL_CONF);
+        assert_eq!(iface.h1.as_deref(), Some("644456937-947561569"));
+        assert_eq!(iface.h4.as_deref(), Some("2143087149-2147361817"));
+    }
+
+    #[test]
+    fn parses_i_fields() {
+        let (iface, _) = parse_conf(FULL_CONF);
+        assert!(iface.i1.as_deref().unwrap_or("").starts_with("<r 2>"));
+        assert_eq!(iface.i2.as_deref(), Some(""));
+        assert_eq!(iface.i5.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn parses_preshared_key_flag() {
+        let (_, peers) = parse_conf(FULL_CONF);
+        assert!(peers[0].has_preshared_key);
+    }
+
+    #[test]
+    fn import_raw_conf_writes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = import_tunnel(FULL_CONF, "test0", dir.path()).unwrap();
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[Interface]"));
+        assert!(content.contains("Jc = 5"));
+    }
+
+    #[test]
+    fn import_vpn_uri_decodes_and_writes() {
+        let uri = "vpn://AAALR3jatVbrbuI4FP7fp0Bo_k3LxHHiJNV0JCi9AC0w0As7zQiFxLQpkGSSQKFVpX2VfYWV9j26b7THdhqCMD-60oRLTr7z-Vzscxy_7JXgKrthkDp-QOOkfFi64xi7XnKJs5yne1BvglxxjgAvE03TdGJh48DSDJ0gkMv7ErLKyEhVDYwxUvQDpBqaQizd0qV0zOiqYgIXg80DFSmWiWGEKqVrnI40rJgG0iygawYmyESGjN7gkX-NS-q3r6OSsjR1U4ELZT9xEWIRTFwyhqw0BYM8Jp6S81xFcYtjICcHbprm6SY2sPFN6pjPglSDd2q0nRp9l6bpMo10ZpszZ8mVilzrB3yhpNp-tuJSnbrbap8nh7FUx9MjMtXUSdIhFOnYZxVYfrEDBttQeDY827LSs8v7OUsVLGnNFXlY8KTFVuRpGU9WZQVeI4vuN5dX0WOWaRHC25C2DelbUNMVUHGGWMlkqLIB-0E2xUW4n69OEVQlBvpZkBgXwSxMUsCc6TR8ot7QjxKmvBO40CkV_vmyNizww0MGCeRnbsmd-jRIG57wcTMxT2_aNESDk6qPrU5wabaqpHaJzrVrtTNtjxfPt2cPqD4faEeFcIQRiOY9-4pZQRVzmxHF_mI4oauM9zkdPT4o5i99pfeuPJU-dxCpzW5qTv0UGf7ZA-4dDz7fX1hXTxJv0Xy0NvV_A-e9JEzcNYKUxmPHpT9tO6h6XkyTpHRUes_mC1YBr7f7gH3q9hqX1d4fQ3jcL33qnxx32vXsGUhdSNNJaYuu2PiPZGkHTRfG6EyAauLuuewsGczkPgIJagkkNccwSFA1IGlMC8K5oG1vCKBi4-S7ACiZKXnrg5JZl_e7HTSYx9_d5OCGRc_uOLtr2V0Xd_jedSmN2Sp256Op74p1WD32b6szy4jPn-o_LpRVo9PDg9nF8hrjXyvHvbztjE4nzf6iNfl-xNeQJg9OTD0x-ub6fvEjmQyudDQLiTGJa15dH5Mz6_bxcXncRY_j63mEa-dmK2Gjq6JBG11WQXlH7pd4E9rBSeBFoR-kbB10UiFGhagVpJJDjSgmW6IunEH8JIU6b1EaOVN_QdnMswUqlO9DmKRtZ0azdipaKrBm6TwjYKOIR7kP6CMaDbmXbEsv7nZRGKcM5rGt0WRSaL-PzM7ackLjBY03O_lDywTb2asdyF6VLGj2juRBSwlxmIZuOB0u2DSE_CUvPUol81FA06EjNgRxFuA7gvTNnsZOkDDnQ-6A0edeVN4gvm6OWx87GduZBfTZdw7glKmuh73uiW1bnFM9Onbm0_R457icl7ixH6VZem9_vf3z759vf7P_Es5JQcJPMajCPwVYnFB58ebwe8lxVbHgynuve_8Bn-G69w";
+        let dir = tempfile::tempdir().unwrap();
+        let path = import_tunnel(uri, "awg1", dir.path()).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[Interface]"), "no [Interface] in: {content}");
+        assert!(content.contains("Jc"), "no Jc in conf");
+        // DNS placeholders must be filled
+        assert!(!content.contains("$PRIMARY_DNS"), "DNS placeholder not filled");
+    }
+
+    #[test]
+    fn import_unknown_format_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = import_tunnel("garbage data", "x", dir.path());
+        assert!(matches!(result, Err(ImportError::UnknownFormat)));
     }
 }
