@@ -9,9 +9,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use tinywifi_core::{
-    discard_backup, leases::LeasesReport, revert, service_restart, service_status, stage_dhcp,
-    stage_wifi, update_dhcp, update_wifi, AutoRevert, DhcpConfig, DhcpSettings, DhcpUpdateError,
-    HostapdConf, SystemStatus, WifiConfig, WifiError, WifiSettings,
+    discard_backup, leases::LeasesReport, revert, scan_tunnels, service_restart, service_status,
+    stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp, update_wifi, AutoRevert,
+    AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, HostapdConf,
+    SystemStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -195,6 +196,34 @@ pub async fn reboot() -> Result<Json<Value>, ApiError> {
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ))
     }
+}
+
+pub async fn vpn_list(_st: State<AppState>) -> Json<Vec<AwgTunnel>> {
+    Json(scan_tunnels(AWG_CONF_DIR))
+}
+
+pub async fn vpn_up(Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+    let tunnels = scan_tunnels(AWG_CONF_DIR);
+    let tunnel = find_tunnel(&tunnels, &name)?;
+    tunnel_up(tunnel).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+pub async fn vpn_down(Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+    let tunnels = scan_tunnels(AWG_CONF_DIR);
+    let tunnel = find_tunnel(&tunnels, &name)?;
+    if tunnel.status != AwgTunnelStatus::Up {
+        return Err(ApiError::new(StatusCode::CONFLICT, format!("tunnel '{name}' is not up")));
+    }
+    tunnel_down(&name).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+fn find_tunnel<'a>(tunnels: &'a [AwgTunnel], name: &str) -> Result<&'a AwgTunnel, ApiError> {
+    tunnels
+        .iter()
+        .find(|t| t.name == name)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("tunnel '{name}' not found")))
 }
 
 fn wifi_error(e: WifiError) -> ApiError {

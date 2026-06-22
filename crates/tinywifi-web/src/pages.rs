@@ -8,6 +8,7 @@ use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::metrics;
 use tinywifi_core::{
+    awg_binary, scan_tunnels, AwgTunnelStatus, AWG_CONF_DIR,
     interface_ipv4, service_status, DhcpConfig, HostapdConf, ServiceStatus, SystemStatus,
 };
 
@@ -20,6 +21,7 @@ const NAV: &[(&str, &str)] = &[
     ("/wifi", "Wi-Fi"),
     ("/dhcp", "DHCP"),
     ("/leases", "Клиенты"),
+    ("/vpn", "VPN"),
     ("/system", "Система"),
 ];
 
@@ -396,6 +398,152 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
     body.push_str("<p><a href=\"/api/leases\">/api/leases</a></p>");
     layout("Клиенты", "Leases", "/leases", &body)
 }
+
+pub async fn vpn(_st: State<AppState>) -> Html<String> {
+    let has_binary = awg_binary().is_some();
+    let tunnels = scan_tunnels(AWG_CONF_DIR);
+
+    let mut body = String::new();
+
+    // Tool status banner
+    if has_binary {
+        body.push_str("<div class=\"callout\"><div class=\"body\">awg: найден &mdash; <code>/usr/bin/awg</code></div></div>\n");
+    } else {
+        body.push_str("<div class=\"callout\" style=\"border-color:var(--status-failed)\"><div class=\"body\">\
+            <b>awg не найден.</b> Установите <code>amneziawg-tools</code>.\
+            </div></div>\n");
+    }
+
+    if tunnels.is_empty() {
+        body.push_str(&format!(
+            "<div class=\"empty\">Нет конфигов в <code>{AWG_CONF_DIR}</code>.</div>\n"
+        ));
+    } else {
+        for t in &tunnels {
+            let status_str = match t.status {
+                AwgTunnelStatus::Up      => "Up",
+                AwgTunnelStatus::Down    => "Down",
+                AwgTunnelStatus::Missing => "Missing",
+            };
+            let pill_html = pill(status_str);
+
+            let addrs = if t.iface.addresses.is_empty() {
+                "—".to_string()
+            } else {
+                t.iface.addresses.join(", ")
+            };
+            let port = t.iface.listen_port.map(|p| p.to_string()).unwrap_or_else(|| "—".to_string());
+            let peers_count = t.peers.len();
+
+            // Obfuscation params
+            let obf = if t.iface.jc.is_some() {
+                format!(
+                    "Jc={} Jmin={} Jmax={} S1={} S2={} H1={} H2={} H3={} H4={}",
+                    t.iface.jc.unwrap_or(0),
+                    t.iface.jmin.unwrap_or(0),
+                    t.iface.jmax.unwrap_or(0),
+                    t.iface.s1.unwrap_or(0),
+                    t.iface.s2.unwrap_or(0),
+                    t.iface.h1.unwrap_or(0),
+                    t.iface.h2.unwrap_or(0),
+                    t.iface.h3.unwrap_or(0),
+                    t.iface.h4.unwrap_or(0),
+                )
+            } else {
+                "нет (стандартный WireGuard)".to_string()
+            };
+
+            body.push_str(&format!(
+                "<section class=\"card\" style=\"margin-bottom:1rem\">\
+                 <div class=\"card__body\">\
+                 <div style=\"display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem\">\
+                 <h2 style=\"margin:0;font-size:1.1rem\">{name}</h2>{pill}\
+                 </div>\
+                 <table class=\"tbl\"><tbody>\n",
+                name = escape(&t.name),
+                pill = pill_html,
+            ));
+            body.push_str(&row("Адрес", &escape(&addrs)));
+            body.push_str(&row("Порт", &escape(&port)));
+            body.push_str(&row("Пиров", &peers_count.to_string()));
+            body.push_str(&row("Обфускация", &escape(&obf)));
+            body.push_str("</tbody></table>\n");
+
+            // Peers table
+            if !t.peers.is_empty() {
+                body.push_str(
+                    "<h3 style=\"margin:.75rem 0 .4rem\">Пиры</h3>\
+                     <table class=\"tbl\"><thead>\
+                     <tr><th>PublicKey</th><th>Endpoint</th><th>AllowedIPs</th><th>Keepalive</th></tr>\
+                     </thead><tbody>\n",
+                );
+                for p in &t.peers {
+                    let pk_short = if p.public_key.len() > 20 {
+                        format!("{}…", &p.public_key[..20])
+                    } else {
+                        p.public_key.clone()
+                    };
+                    body.push_str(&format!(
+                        "<tr><td class=\"col-host\" title=\"{pk_full}\">{pk}</td>\
+                         <td>{ep}</td><td>{ips}</td><td>{ka}</td></tr>\n",
+                        pk_full = escape(&p.public_key),
+                        pk = escape(&pk_short),
+                        ep = escape(p.endpoint.as_deref().unwrap_or("—")),
+                        ips = escape(&p.allowed_ips.join(", ")),
+                        ka = p.persistent_keepalive.map(|k| format!("{k}s")).unwrap_or_else(|| "—".to_string()),
+                    ));
+                }
+                body.push_str("</tbody></table>\n");
+            }
+
+            // Up/Down buttons
+            let (up_disabled, down_disabled) = match t.status {
+                AwgTunnelStatus::Up      => (" disabled", ""),
+                AwgTunnelStatus::Down    => ("", " disabled"),
+                AwgTunnelStatus::Missing => (" disabled", " disabled"),
+            };
+            body.push_str(&format!(
+                "<div class=\"form-actions\" style=\"margin-top:.75rem\">\
+                 <button class=\"btn btn--primary\" onclick=\"vpnAct('/api/vpn/{n}/up',this)'{up_d}'>Up</button>\
+                 <button class=\"btn btn--ghost\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\"{down_d}>Down</button>\
+                 <span id=\"vpn-result-{n}\" class=\"note\" role=\"status\"></span>\
+                 </div>\n",
+                n = escape(&t.name),
+                up_d = up_disabled,
+                down_d = down_disabled,
+            ));
+
+            body.push_str("</div></section>\n");
+        }
+    }
+
+    body.push_str("<p><a href=\"/api/vpn\">/api/vpn</a></p>\n");
+    body.push_str(VPN_SCRIPT);
+
+    layout("Туннели", "VPN", "/vpn", &body)
+}
+
+const VPN_SCRIPT: &str = "\
+<script>\n\
+async function vpnAct(url, btn) {\n\
+  const name = url.split('/')[3];\n\
+  const out = document.getElementById('vpn-result-' + name);\n\
+  btn.disabled = true;\n\
+  if (out) { out.style.color=''; out.textContent='Working…'; }\n\
+  try {\n\
+    const r = await fetch(url, {method:'POST'});\n\
+    let j = {}; try { j = await r.json(); } catch(e) {}\n\
+    if (out) {\n\
+      out.style.color = r.ok ? 'green' : 'red';\n\
+      out.textContent = r.ok ? 'OK' : ('Error: ' + (j.error || r.statusText));\n\
+    }\n\
+    if (r.ok) setTimeout(function(){ location.reload(); }, 800);\n\
+  } catch(e) {\n\
+    if (out) { out.style.color='red'; out.textContent='Request failed: '+e; }\n\
+  }\n\
+  btn.disabled = false;\n\
+}\n\
+</script>\n";
 
 const SYSTEM_SCRIPT: &str = "\
 <p id=\"result\" role=\"status\"></p>\n\

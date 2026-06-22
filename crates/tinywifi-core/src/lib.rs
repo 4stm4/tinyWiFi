@@ -4,6 +4,7 @@
 //! Project rule: always check service/file/interface availability *before*
 //! reading, restarting, or rendering data.
 
+pub mod amnezia;
 pub mod config;
 pub mod file;
 pub mod hostapd;
@@ -16,6 +17,11 @@ pub mod service;
 pub mod status;
 pub mod wifi;
 
+pub use amnezia::{
+    awg_binary, parse_awg_show, parse_conf as parse_awg_conf, scan_tunnels,
+    tunnel_down, tunnel_up, AwgInterface, AwgPeer, AwgShowIface, AwgTunnel,
+    AwgTunnelStatus, AWG_CONF_DIR,
+};
 pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};
 pub use interface::{has_default_route, interface_exists, interface_has_ip, interface_ipv4};
