@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(cfg.web.listen, "0.0.0.0:8080");
         assert_eq!(cfg.display.refresh_secs, 10);
         assert_eq!(cfg.paths.nanodhcp_conf, PathBuf::from("/etc/nanodhcp/nanodhcp.conf"));
-        assert_eq!(cfg.paths.leases_file, PathBuf::from("/var/lib/nanodhcp/leases.json"));
+        assert_eq!(cfg.paths.leases_file, PathBuf::from("/var/lib/nanodhcp/leases"));
         assert_eq!(cfg.services.hostapd, "hostapd");
         assert_eq!(cfg.services.display, "tinywifi-display");
     }
