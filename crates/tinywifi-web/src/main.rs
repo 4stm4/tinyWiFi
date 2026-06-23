@@ -44,12 +44,14 @@ fn build_router(state: AppState) -> Router {
         .route("/api/vpn/:name/down", post(api::vpn_down))
         .route("/api/vpn/bypass", get(api::vpn_bypass_get).post(api::vpn_bypass_post))
         .route("/api/status", get(api::status))
-        .route("/api/traffic", get(api::traffic))
         .route("/api/wifi", get(api::wifi_get).post(api::wifi_post))
         .route("/api/wifi/confirm", post(api::wifi_confirm))
         .route("/api/dhcp", get(api::dhcp_get).post(api::dhcp_post))
         .route("/api/dhcp/confirm", post(api::dhcp_confirm))
         .route("/api/leases", get(api::leases))
+        .route("/api/acl", get(api::acl_get).post(api::acl_post))
+        .route("/api/acl/block", post(api::acl_block))
+        .route("/api/acl/unblock", post(api::acl_unblock))
         .route("/api/services", get(api::services))
         .route(
             "/api/services/:name/restart",

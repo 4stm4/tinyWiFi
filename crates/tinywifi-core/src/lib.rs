@@ -16,6 +16,7 @@ pub mod nanodhcp;
 pub mod safety;
 pub mod service;
 pub mod status;
+pub mod acl;
 pub mod wifi;
 
 pub use amnezia::{
@@ -28,7 +29,7 @@ pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};
 pub use interface::{has_default_route, interface_exists, interface_has_ip, interface_ipv4};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
-pub use metrics::{iface_traffic, load_average, memory, uptime_secs, Memory};
+pub use metrics::{load_average, memory, uptime_secs, Memory};
 pub use nanodhcp::{stage_dhcp, update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
 pub use safety::{discard_backup, revert, wait_until_running, AutoRevert};
 pub use service::{
@@ -40,6 +41,7 @@ pub use wan::{
     apply_wan, wan_candidates, wan_status, IfaceState, WanConfig, WanMode, WanStatus,
     WAN_CONF_PATH,
 };
+pub use acl::{AclMode, AclState, ACL_STATE_FILE};
 pub use wifi::{stage_wifi, update_wifi, WifiError, WifiSettings};
 
 /// Crate version, surfaced in the dashboard and on the display.

@@ -118,6 +118,11 @@ impl HostapdConf {
     }
 
     /// Value of the first directive with this key, if present.
+    /// Remove all directives with this key from the config.
+    pub fn remove_key(&mut self, key: &str) {
+        self.lines.retain(|line| !matches!(line, Line::Pair { key: k, .. } if k == key));
+    }
+
     pub fn get(&self, key: &str) -> Option<&str> {
         self.lines.iter().find_map(|line| match line {
             Line::Pair { key: k, value } if k == key => Some(value.as_str()),
