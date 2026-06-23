@@ -10,12 +10,13 @@ use serde_json::{json, Value};
 
 use crate::auth;
 use tinywifi_core::{
-    apply_wan, discard_backup, iface_traffic, import_tunnel, leases::LeasesReport, load_bypass_list,
-    revert, save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp,
-    stage_wifi, tunnel_down, tunnel_up, update_dhcp, update_wifi, wan_candidates, wan_status,
-    AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError,
-    HostapdConf, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError, WifiSettings,
-    AWG_CONF_DIR,
+    add_static_lease, apply_wan, discard_backup, iface_traffic, import_tunnel,
+    leases::LeasesReport, list_static_leases, load_bypass_list, remove_static_lease, revert,
+    save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp, stage_wifi,
+    tunnel_down, tunnel_up, update_dhcp, update_wifi, wan_candidates, wan_status, AutoRevert,
+    AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, HostapdConf,
+    StaticLease, StaticLeaseError, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError,
+    WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -297,6 +298,48 @@ pub async fn vpn_bypass_post(Json(body): Json<BypassBody>) -> Result<Json<Value>
     save_bypass_list(&body.entries)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(ok())
+}
+
+// ── Static DHCP leases ───────────────────────────────────────────────────────
+
+pub async fn static_leases_get(State(st): State<AppState>) -> Result<Json<Vec<StaticLease>>, ApiError> {
+    list_static_leases(&st.config.paths.nanodhcp_conf)
+        .map(Json)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+#[derive(Deserialize)]
+pub struct StaticLeaseBody {
+    pub name: String,
+    pub mac: String,
+    pub ip: std::net::Ipv4Addr,
+}
+
+pub async fn static_leases_post(
+    State(st): State<AppState>,
+    Json(body): Json<StaticLeaseBody>,
+) -> Result<Json<Value>, ApiError> {
+    let lease = StaticLease { name: body.name, mac: body.mac, ip: body.ip };
+    add_static_lease(&st.config.paths.nanodhcp_conf, &lease).map_err(static_lease_error)?;
+    Ok(ok())
+}
+
+pub async fn static_leases_delete(
+    State(st): State<AppState>,
+    Path(mac): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    remove_static_lease(&st.config.paths.nanodhcp_conf, &mac).map_err(static_lease_error)?;
+    Ok(ok())
+}
+
+fn static_lease_error(e: StaticLeaseError) -> ApiError {
+    let status = match &e {
+        StaticLeaseError::DuplicateMac(_) | StaticLeaseError::DuplicateIp(_) => StatusCode::CONFLICT,
+        StaticLeaseError::NotFound(_) => StatusCode::NOT_FOUND,
+        StaticLeaseError::NotWritable(_) => StatusCode::FORBIDDEN,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    ApiError::new(status, e.to_string())
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────

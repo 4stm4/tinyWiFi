@@ -21,6 +21,7 @@ use crate::service::{service_restart, ServiceError};
 const NANODHCP_SERVICE: &str = "nanodhcp";
 
 // File keys mapped onto [`DhcpConfig`] fields.
+const K_STATIC: &str = "static";
 const K_INTERFACE: &str = "interface";
 const K_RANGE_START: &str = "pool_start";
 const K_RANGE_END: &str = "pool_end";
@@ -98,6 +99,30 @@ impl DhcpConf {
                 }
             }
         }
+        self.lines.push(Line::Pair {
+            key: key.to_string(),
+            value: value.to_string(),
+        });
+    }
+
+    /// All values for `key` (supports repeatable keys like `static=`).
+    pub fn get_all(&self, key: &str) -> Vec<&str> {
+        self.lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::Pair { key: k, value } if k == key => Some(value.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Remove a single `key=value` line whose value equals `value`.
+    pub fn remove_where(&mut self, key: &str, value: &str) {
+        self.lines.retain(|line| !matches!(line, Line::Pair { key: k, value: v } if k == key && v == value));
+    }
+
+    /// Append a new `key=value` line (does not check for duplicates).
+    pub fn append(&mut self, key: &str, value: &str) {
         self.lines.push(Line::Pair {
             key: key.to_string(),
             value: value.to_string(),
@@ -249,6 +274,113 @@ impl DhcpConfig {
             Err(errors)
         }
     }
+}
+
+/// A static DHCP binding: `static=name,mac,ip` in nanodhcp.conf.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaticLease {
+    pub name: String,
+    pub mac: String,
+    pub ip: Ipv4Addr,
+}
+
+impl StaticLease {
+    fn to_conf_value(&self) -> String {
+        format!("{},{},{}", self.name, self.mac.to_lowercase(), self.ip)
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        let mut parts = value.splitn(3, ',');
+        let name = parts.next()?.trim().to_string();
+        let mac = parts.next()?.trim().to_lowercase();
+        let ip: Ipv4Addr = parts.next()?.trim().parse().ok()?;
+        Some(StaticLease { name, mac, ip })
+    }
+}
+
+/// Error type for static lease operations.
+#[derive(Debug)]
+pub enum StaticLeaseError {
+    Load(DhcpError),
+    NotWritable(PathBuf),
+    DuplicateMac(String),
+    DuplicateIp(Ipv4Addr),
+    NotFound(String),
+    Io(io::Error),
+}
+
+impl fmt::Display for StaticLeaseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StaticLeaseError::Load(e) => write!(f, "{e}"),
+            StaticLeaseError::NotWritable(p) => write!(f, "not writable: {}", p.display()),
+            StaticLeaseError::DuplicateMac(m) => write!(f, "MAC {m} already has a static lease"),
+            StaticLeaseError::DuplicateIp(ip) => write!(f, "IP {ip} already has a static lease"),
+            StaticLeaseError::NotFound(m) => write!(f, "no static lease for MAC {m}"),
+            StaticLeaseError::Io(e) => write!(f, "filesystem error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for StaticLeaseError {}
+
+/// Return all static leases from the config file.
+pub fn list_static_leases(path: impl AsRef<Path>) -> Result<Vec<StaticLease>, DhcpError> {
+    let conf = DhcpConf::from_path(path)?;
+    Ok(conf
+        .get_all(K_STATIC)
+        .into_iter()
+        .filter_map(StaticLease::parse)
+        .collect())
+}
+
+/// Add a new static lease, writing the config and restarting nanodhcp.
+pub fn add_static_lease(path: impl AsRef<Path>, lease: &StaticLease) -> Result<(), StaticLeaseError> {
+    let path = path.as_ref();
+    let mut conf = DhcpConf::from_path(path).map_err(StaticLeaseError::Load)?;
+    let existing: Vec<StaticLease> = conf
+        .get_all(K_STATIC)
+        .into_iter()
+        .filter_map(StaticLease::parse)
+        .collect();
+
+    let mac = lease.mac.to_lowercase();
+    if existing.iter().any(|l| l.mac == mac) {
+        return Err(StaticLeaseError::DuplicateMac(mac));
+    }
+    if existing.iter().any(|l| l.ip == lease.ip) {
+        return Err(StaticLeaseError::DuplicateIp(lease.ip));
+    }
+    if !file_writable(path) {
+        return Err(StaticLeaseError::NotWritable(path.to_path_buf()));
+    }
+
+    conf.append(K_STATIC, &lease.to_conf_value());
+    std::fs::write(path, conf.to_string()).map_err(StaticLeaseError::Io)?;
+    let _ = service_restart(NANODHCP_SERVICE);
+    Ok(())
+}
+
+/// Remove a static lease by MAC address, writing the config and restarting nanodhcp.
+pub fn remove_static_lease(path: impl AsRef<Path>, mac: &str) -> Result<(), StaticLeaseError> {
+    let path = path.as_ref();
+    let mut conf = DhcpConf::from_path(path).map_err(StaticLeaseError::Load)?;
+    let mac_lc = mac.to_lowercase();
+
+    let target = conf
+        .get_all(K_STATIC)
+        .into_iter()
+        .find_map(|v| StaticLease::parse(v).filter(|l| l.mac == mac_lc))
+        .ok_or_else(|| StaticLeaseError::NotFound(mac_lc.clone()))?;
+
+    if !file_writable(path) {
+        return Err(StaticLeaseError::NotWritable(path.to_path_buf()));
+    }
+
+    conf.remove_where(K_STATIC, &target.to_conf_value());
+    std::fs::write(path, conf.to_string()).map_err(StaticLeaseError::Io)?;
+    let _ = service_restart(NANODHCP_SERVICE);
+    Ok(())
 }
 
 /// The user-editable DHCP fields. `interface` and `leases_file` are not
@@ -491,6 +623,40 @@ mod tests {
     fn update_refuses_missing_file() {
         let err = update_dhcp("/nonexistent/nanodhcp.conf", &settings()).unwrap_err();
         assert!(matches!(err, DhcpUpdateError::Load(DhcpError::NotFound(_))));
+    }
+
+    #[test]
+    fn static_lease_roundtrip() {
+        let lease = StaticLease {
+            name: "laptop".to_string(),
+            mac: "AA:BB:CC:DD:EE:FF".to_string(),
+            ip: Ipv4Addr::new(192, 168, 44, 50),
+        };
+        let parsed = StaticLease::parse(&lease.to_conf_value()).unwrap();
+        assert_eq!(parsed.mac, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(parsed.ip, lease.ip);
+        assert_eq!(parsed.name, "laptop");
+    }
+
+    #[test]
+    fn static_lease_crud_in_memory() {
+        let mut conf = DhcpConf::parse(REAL_CONFIG);
+        assert!(conf.get_all(K_STATIC).is_empty());
+
+        conf.append(K_STATIC, "pc,aa:bb:cc:00:00:01,192.168.44.51");
+        conf.append(K_STATIC, "tv,aa:bb:cc:00:00:02,192.168.44.52");
+        let leases: Vec<_> = conf.get_all(K_STATIC).into_iter().filter_map(StaticLease::parse).collect();
+        assert_eq!(leases.len(), 2);
+        assert_eq!(leases[0].name, "pc");
+
+        conf.remove_where(K_STATIC, "pc,aa:bb:cc:00:00:01,192.168.44.51");
+        let leases: Vec<_> = conf.get_all(K_STATIC).into_iter().filter_map(StaticLease::parse).collect();
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].name, "tv");
+
+        let out = conf.to_string();
+        assert!(out.contains("static=tv,aa:bb:cc:00:00:02,192.168.44.52"));
+        assert!(!out.contains("static=pc"));
     }
 
     #[test]

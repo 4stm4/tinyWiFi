@@ -8,9 +8,9 @@ use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    iface_traffic, interface_ipv4, scan_tunnels, service_status, wan_candidates, wan_status,
-    AwgTunnelStatus, DhcpConfig, HostapdConf, IfaceState, ServiceStatus, SystemStatus, WanConfig,
-    WanMode, AWG_CONF_DIR,
+    iface_traffic, interface_ipv4, list_static_leases, scan_tunnels, service_status, wan_candidates,
+    wan_status, AwgTunnelStatus, DhcpConfig, HostapdConf, IfaceState, ServiceStatus, SystemStatus,
+    WanConfig, WanMode, AWG_CONF_DIR,
 };
 
 use crate::auth;
@@ -466,7 +466,13 @@ pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
 
 pub async fn leases(State(st): State<AppState>) -> Html<String> {
     let report = LeasesReport::read(&st.config.paths.leases_file);
-    let mut body = format!("<p>Состояние: {}</p>\n", pill(&format!("{:?}", report.state)));
+    let static_leases = list_static_leases(&st.config.paths.nanodhcp_conf).unwrap_or_default();
+    let mut body = String::new();
+
+    // ── Dynamic leases ────────────────────────────────────────────────────────
+    body.push_str("<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n");
+    body.push_str("<h2 style=\"margin:0 0 .75rem\">Активные клиенты</h2>\n");
+    body.push_str(&format!("<p>Состояние: {}</p>\n", pill(&format!("{:?}", report.state))));
     if let Some(err) = &report.error {
         body.push_str(&format!(
             "<div class=\"callout\" style=\"border-color:var(--status-failed)\">\
@@ -497,9 +503,95 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
         }
         body.push_str("</tbody></table>\n");
     }
-    body.push_str("<p><a href=\"/api/leases\">/api/leases</a></p>");
+    body.push_str("</div></section>\n");
+
+    // ── Static leases ─────────────────────────────────────────────────────────
+    body.push_str("<section class=\"card\"><div class=\"card__body\">\n");
+    body.push_str("<h2 style=\"margin:0 0 .75rem\">Статические аренды</h2>\n");
+
+    if static_leases.is_empty() {
+        body.push_str("<div class=\"empty\" style=\"margin-bottom:.75rem\">Статических аренд нет.</div>\n");
+    } else {
+        body.push_str(
+            "<table class=\"tbl\" style=\"margin-bottom:.75rem\">\n\
+             <thead><tr><th>Имя</th><th>MAC</th><th>IP</th><th></th></tr></thead>\n<tbody>\n",
+        );
+        for sl in &static_leases {
+            body.push_str(&format!(
+                "<tr>\
+                 <td>{name}</td>\
+                 <td><code style=\"font-size:.8rem\">{mac}</code></td>\
+                 <td>{ip}</td>\
+                 <td><button class=\"btn btn--ghost btn--sm\" \
+                 onclick=\"slDelete(this,'{mac_js}')\">✕</button></td>\
+                 </tr>\n",
+                name = escape(&sl.name),
+                mac = escape(&sl.mac),
+                ip = escape(&sl.ip.to_string()),
+                mac_js = sl.mac.replace(':', "%3A"),
+            ));
+        }
+        body.push_str("</tbody></table>\n");
+    }
+
+    // Add form
+    body.push_str(
+        "<div class=\"form-grid\">\n\
+         <div class=\"field\">\
+         <label for=\"sl-name\">Имя хоста</label>\
+         <input id=\"sl-name\" placeholder=\"laptop\" maxlength=\"64\">\
+         </div>\
+         <div class=\"field\">\
+         <label for=\"sl-mac\">MAC-адрес</label>\
+         <input id=\"sl-mac\" placeholder=\"aa:bb:cc:dd:ee:ff\">\
+         </div>\
+         <div class=\"field\">\
+         <label for=\"sl-ip\">IP-адрес</label>\
+         <input id=\"sl-ip\" placeholder=\"192.168.44.50\">\
+         </div>\
+         </div>\n\
+         <div class=\"form-actions\">\
+         <button class=\"btn btn--primary\" onclick=\"slAdd(this)\">Добавить</button>\
+         <span id=\"sl-result\" class=\"note\" role=\"status\"></span>\
+         </div>\n"
+    );
+    body.push_str("</div></section>\n");
+    body.push_str(STATIC_LEASE_SCRIPT);
+
     layout("Клиенты", "Leases", "/leases", &body)
 }
+
+const STATIC_LEASE_SCRIPT: &str = "\
+<script>\n\
+async function slAdd(btn){\n\
+  var name=document.getElementById('sl-name').value.trim();\n\
+  var mac=document.getElementById('sl-mac').value.trim();\n\
+  var ip=document.getElementById('sl-ip').value.trim();\n\
+  var out=document.getElementById('sl-result');\n\
+  if(!name||!mac||!ip){out.style.color='red';out.textContent='Заполните все поля';return;}\n\
+  btn.disabled=true;out.style.color='';out.textContent='Добавление…';\n\
+  try{\n\
+    var r=await fetch('/api/dhcp/static',{method:'POST',\n\
+      headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({name:name,mac:mac,ip:ip})});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';out.textContent='Добавлено ✓';setTimeout(function(){location.reload();},700);}\n\
+    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+  btn.disabled=false;\n\
+}\n\
+async function slDelete(btn,mac){\n\
+  var out=document.getElementById('sl-result');\n\
+  var macDecoded=decodeURIComponent(mac);\n\
+  btn.disabled=true;out.style.color='';out.textContent='Удаление…';\n\
+  try{\n\
+    var r=await fetch('/api/dhcp/static/'+encodeURIComponent(macDecoded),{method:'DELETE'});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){btn.closest('tr').remove();out.style.color='green';out.textContent='Удалено ✓';setTimeout(function(){out.textContent='';},2000);}\n\
+    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);btn.disabled=false;}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;btn.disabled=false;}\n\
+}\n\
+</script>\n";
 
 pub async fn wan(_st: State<AppState>) -> Html<String> {
     let candidates = wan_candidates();

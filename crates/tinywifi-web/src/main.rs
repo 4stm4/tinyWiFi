@@ -71,6 +71,8 @@ fn build_router(state: AppState) -> Router {
         .route("/api/dhcp", get(api::dhcp_get).post(api::dhcp_post))
         .route("/api/dhcp/confirm", post(api::dhcp_confirm))
         .route("/api/leases", get(api::leases))
+        .route("/api/dhcp/static", get(api::static_leases_get).post(api::static_leases_post))
+        .route("/api/dhcp/static/:mac", axum::routing::delete(api::static_leases_delete))
         .route("/api/services", get(api::services))
         .route(
             "/api/services/:name/restart",

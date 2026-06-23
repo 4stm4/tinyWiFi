@@ -29,7 +29,10 @@ pub use hostapd::{HostapdConf, WifiConfig};
 pub use interface::{has_default_route, interface_exists, interface_has_ip, interface_ipv4};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
 pub use metrics::{iface_traffic, load_average, memory, uptime_secs, Memory};
-pub use nanodhcp::{stage_dhcp, update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
+pub use nanodhcp::{
+    add_static_lease, list_static_leases, remove_static_lease, stage_dhcp, update_dhcp, DhcpConfig,
+    DhcpError, DhcpSettings, DhcpUpdateError, StaticLease, StaticLeaseError,
+};
 pub use safety::{discard_backup, revert, wait_until_running, AutoRevert};
 pub use service::{
     service_exists, service_reload_or_restart, service_restart, service_running, service_start,
