@@ -1,5 +1,6 @@
 mod api;
 mod assets;
+mod auth;
 mod pages;
 mod state;
 
@@ -8,14 +9,14 @@ mod tests;
 
 use std::process::ExitCode;
 
+use axum::middleware;
+use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::Router;
 use tinywifi_core::config::{self, TinywifiConfig};
 
 use crate::state::AppState;
 
-/// Resolve the config path: `$TINYWIFI_CONFIG`, else the on-device default,
-/// else the in-repo copy for local development.
 fn config_path() -> String {
     if let Ok(p) = std::env::var("TINYWIFI_CONFIG") {
         return p;
@@ -26,11 +27,31 @@ fn config_path() -> String {
     "configs/tinywifi.toml".to_string()
 }
 
+/// Middleware: redirect to /login unless the request carries a valid session.
+async fn require_auth(
+    axum::extract::State(st): axum::extract::State<AppState>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    if let Some(token) = auth::extract_session_cookie(request.headers()) {
+        if auth::session_valid(&st.sessions, &token) {
+            return next.run(request).await;
+        }
+    }
+    Redirect::to("/login").into_response()
+}
+
 fn build_router(state: AppState) -> Router {
-    Router::new()
-        .route("/", get(pages::index))
+    // Public routes — no auth required.
+    let public = Router::new()
+        .route("/login", get(pages::login).post(api::login_post))
+        .route("/logout", post(api::logout_post))
         .route("/style.css", get(assets::style_css))
-        .route("/fonts/:name", get(assets::font))
+        .route("/fonts/:name", get(assets::font));
+
+    // Protected routes — all require a valid session cookie.
+    let protected = Router::new()
+        .route("/", get(pages::index))
         .route("/dashboard", get(pages::dashboard))
         .route("/wifi", get(pages::wifi))
         .route("/dhcp", get(pages::dhcp))
@@ -56,11 +77,22 @@ fn build_router(state: AppState) -> Router {
             post(api::service_restart_handler),
         )
         .route("/api/system/reboot", post(api::reboot))
+        .route("/api/auth/password", post(api::change_password))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_auth,
+        ));
+
+    Router::new()
+        .merge(public)
+        .merge(protected)
         .with_state(state)
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    auth::init();
+
     let path = config_path();
     let config = match TinywifiConfig::from_path(&path) {
         Ok(c) => c,

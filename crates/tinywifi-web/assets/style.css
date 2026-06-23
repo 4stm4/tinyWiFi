@@ -1114,3 +1114,35 @@ body { overflow: auto; min-height: 100vh; display: block; }
 /* device glyph inside the leases host cell */
 .col-host .dev-ico { color: var(--fg-4); margin-right: 8px; display: inline-flex; vertical-align: -3px; }
 .tbl .sig { vertical-align: middle; }
+
+/* ── Login page ─────────────────────────────────────────────────────────── */
+.login-page {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--bg-0); padding: 24px;
+}
+.login-card {
+  width: 100%; max-width: 360px;
+  background: var(--bg-panel); border: 1px solid var(--border-1);
+  border-radius: var(--radius-lg); padding: 36px 32px;
+}
+.login-brand {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 28px;
+  font-size: 20px;
+}
+.login-brand .mark { color: var(--accent); }
+.login-form { display: flex; flex-direction: column; gap: 16px; }
+.login-error {
+  font-size: 12.5px; color: var(--status-failed);
+  background: rgba(255,100,100,.08); border: 1px solid rgba(255,100,100,.2);
+  border-radius: var(--radius-sm); padding: 8px 12px; margin: 0;
+}
+
+/* ── Alert banner (default password warning etc.) ───────────────────────── */
+.alert {
+  padding: 10px 20px; font-size: 13px; line-height: 1.5;
+}
+.alert--warn {
+  background: rgba(230,170,0,.12); border-bottom: 1px solid rgba(230,170,0,.25);
+  color: var(--fg-1);
+}
+.alert--warn a { color: var(--accent); }

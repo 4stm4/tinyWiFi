@@ -13,6 +13,7 @@ use tinywifi_core::{
     WanMode, AWG_CONF_DIR,
 };
 
+use crate::auth;
 use crate::state::AppState;
 
 /// Top navigation: (href, Russian label). The English page name is passed by
@@ -133,6 +134,14 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
         })
         .collect::<Vec<_>>()
         .join("");
+    let default_pw_banner = if auth::is_default_password() {
+        "<div class=\"alert alert--warn\">\
+         ⚠ Установлен пароль по умолчанию (<b>admin</b>). \
+         <a href=\"/system\">Смените пароль</a> в разделе Система.\
+         </div>\n"
+    } else {
+        ""
+    };
     Html(format!(
         "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
@@ -146,8 +155,11 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
          <span class=\"name\">tiny<b>wifi</b></span></div>\n\
          <nav class=\"tw-nav\">{nav}</nav>\n\
          <button class=\"theme-toggle\" onclick=\"twToggleTheme()\" title=\"Тема\" \
-         aria-label=\"Переключить тему\" style=\"margin-left:auto\">{THEME_ICON}</button>\n\
+         aria-label=\"Переключить тему\">{THEME_ICON}</button>\n\
+         <form action=\"/logout\" method=\"post\" style=\"margin-left:8px\">\
+         <button class=\"btn btn--ghost btn--sm\" type=\"submit\">Выйти</button></form>\n\
          </header>\n\
+         {default_pw_banner}\
          <main class=\"page\">\n\
          <div class=\"page__head\">\
          <h1 class=\"page__title\"><span class=\"en\">{en}</span>{title}</h1></div>\n\
@@ -159,6 +171,40 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
 
 pub async fn index() -> Redirect {
     Redirect::to("/dashboard")
+}
+
+pub async fn login(axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>) -> Html<String> {
+    let error_html = if params.get("err").map(String::as_str) == Some("1") {
+        "<p class=\"login-error\">Неверный пароль</p>"
+    } else {
+        ""
+    };
+    Html(format!(
+        "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\
+         <meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <script>try{{var t=localStorage.getItem('tw-theme');if(t)document.documentElement.dataset.theme=t;}}catch(e){{}}</script>\n\
+         <title>TinyWifi — Вход</title>\n\
+         <link rel=\"stylesheet\" href=\"/style.css\">\n\
+         </head>\n<body>\n\
+         <main class=\"login-page\">\n\
+         <div class=\"login-card\">\n\
+         <div class=\"login-brand\"><span class=\"mark\">{BRAND_MARK}</span>\
+         <span class=\"name\">tiny<b>wifi</b></span></div>\n\
+         <form method=\"post\" action=\"/login\" class=\"login-form\">\n\
+         <div class=\"field\">\
+         <label>Пароль <span class=\"en\">Password</span></label>\
+         <input type=\"password\" name=\"password\" autofocus required \
+         placeholder=\"Введите пароль\">\
+         </div>\n\
+         {error_html}\
+         <button class=\"btn btn--primary\" type=\"submit\" style=\"width:100%\">Войти</button>\n\
+         </form>\n\
+         </div>\n\
+         </main>\n\
+         {THEME_SCRIPT}\
+         </body>\n</html>\n"
+    ))
 }
 
 fn opt<T: Display>(value: Option<T>) -> String {
@@ -785,6 +831,27 @@ async function act(url, btn, confirmMsg){\n\
   } catch(e){ out.textContent = 'Request failed: ' + e; }\n\
   btn.disabled = false;\n\
 }\n\
+async function twChangePassword(btn){\n\
+  const cur = document.getElementById('cur-pw').value;\n\
+  const nw = document.getElementById('new-pw').value;\n\
+  const nw2 = document.getElementById('new-pw2').value;\n\
+  const out = document.getElementById('pw-result');\n\
+  if(nw !== nw2){ out.style.color='red'; out.textContent='Пароли не совпадают'; return; }\n\
+  if(nw.length < 8){ out.style.color='red'; out.textContent='Минимум 8 символов'; return; }\n\
+  btn.disabled = true; out.style.color=''; out.textContent='Сохранение…';\n\
+  try {\n\
+    const r = await fetch('/api/auth/password',{method:'POST',\n\
+      headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({current:cur,new:nw})});\n\
+    let j={}; try{j=await r.json();}catch(e){}\n\
+    if(r.ok){ out.style.color='green'; out.textContent='Пароль изменён ✓'; \n\
+      document.getElementById('cur-pw').value='';\n\
+      document.getElementById('new-pw').value='';\n\
+      document.getElementById('new-pw2').value=''; }\n\
+    else{ out.style.color='red'; out.textContent='Ошибка: '+(j.error||r.statusText); }\n\
+  } catch(e){ out.style.color='red'; out.textContent='Сбой: '+e; }\n\
+  btn.disabled = false;\n\
+}\n\
 </script>\n";
 
 pub async fn system(State(st): State<AppState>) -> Html<String> {
@@ -826,6 +893,30 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
         ));
     }
     body.push_str("</tbody></table>\n");
+
+    // Security — password change
+    body.push_str(
+        "<h2>Безопасность</h2>\n\
+         <div class=\"form-grid\" style=\"max-width:480px\">\
+         <div class=\"field field--full\">\
+         <label>Текущий пароль <span class=\"en\">Current password</span></label>\
+         <input type=\"password\" id=\"cur-pw\" autocomplete=\"current-password\">\
+         </div>\
+         <div class=\"field\">\
+         <label>Новый пароль <span class=\"en\">New password</span></label>\
+         <input type=\"password\" id=\"new-pw\" autocomplete=\"new-password\">\
+         </div>\
+         <div class=\"field\">\
+         <label>Повторите <span class=\"en\">Confirm</span></label>\
+         <input type=\"password\" id=\"new-pw2\" autocomplete=\"new-password\">\
+         </div>\
+         <div class=\"form-actions field--full\">\
+         <button class=\"btn btn--primary\" onclick=\"twChangePassword(this)\">Сменить пароль</button>\
+         <span id=\"pw-result\" class=\"note\"></span>\
+         </div>\
+         </div>\n",
+    );
+
     body.push_str(
         "<h2>Устройство</h2>\n\
          <div class=\"danger-zone\">\

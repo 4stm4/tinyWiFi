@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::extract::{Form, Path, Query, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::auth;
 use tinywifi_core::{
     apply_wan, discard_backup, iface_traffic, import_tunnel, leases::LeasesReport, load_bypass_list,
     revert, save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp,
@@ -296,6 +297,77 @@ pub async fn vpn_bypass_post(Json(body): Json<BypassBody>) -> Result<Json<Value>
     save_bypass_list(&body.entries)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(ok())
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct LoginForm {
+    pub password: String,
+}
+
+pub async fn login_post(
+    State(st): State<AppState>,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    let hash = auth::read_hash().unwrap_or_default();
+    if auth::verify_password(&form.password, &hash) {
+        let token = auth::session_create(&st.sessions);
+        let cookie = format!(
+            "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
+            auth::SESSION_COOKIE,
+            token
+        );
+        ([(header::SET_COOKIE, cookie)], Redirect::to("/dashboard")).into_response()
+    } else {
+        Redirect::to("/login?err=1").into_response()
+    }
+}
+
+pub async fn logout_post(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    if let Some(token) = auth::extract_session_cookie(&headers) {
+        auth::session_remove(&st.sessions, &token);
+    }
+    let clear = format!(
+        "{}=; Path=/; Max-Age=0",
+        auth::SESSION_COOKIE
+    );
+    ([(header::SET_COOKIE, clear)], Redirect::to("/login")).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ChangePasswordBody {
+    pub current: String,
+    pub new: String,
+}
+
+pub async fn change_password(
+    Json(body): Json<ChangePasswordBody>,
+) -> Response {
+    let hash = auth::read_hash().unwrap_or_default();
+    if !auth::verify_password(&body.current, &hash) {
+        return ApiError::new(StatusCode::UNAUTHORIZED, "Неверный пароль").into_response();
+    }
+    if body.new.len() < 8 {
+        return ApiError::new(StatusCode::BAD_REQUEST, "Пароль — минимум 8 символов").into_response();
+    }
+    match auth::hash_password(&body.new) {
+        Ok(new_hash) => match auth::write_hash(&new_hash) {
+            Ok(_) => {
+                auth::on_password_changed();
+                Json(json!({ "status": "ok" })).into_response()
+            }
+            Err(e) => ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось сохранить: {e}"),
+            )
+            .into_response(),
+        },
+        Err(e) => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
 }
 
 fn wifi_error(e: WifiError) -> ApiError {

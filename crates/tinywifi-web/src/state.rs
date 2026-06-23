@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use tinywifi_core::{AutoRevert, HostapdConf, TinywifiConfig};
 
+use crate::auth;
+
 /// Armed auto-reverts awaiting confirmation, keyed by area (`"wifi"`,
 /// `"dhcp"`). Arming a new change for a key replaces (and cancels) the
 /// previous pending one.
@@ -13,6 +15,7 @@ pub type PendingReverts = Arc<Mutex<HashMap<&'static str, AutoRevert>>>;
 pub struct AppState {
     pub config: Arc<TinywifiConfig>,
     pub pending: PendingReverts,
+    pub sessions: auth::Sessions,
 }
 
 impl AppState {
@@ -20,6 +23,7 @@ impl AppState {
         AppState {
             config: Arc::new(config),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            sessions: auth::new_sessions(),
         }
     }
 
