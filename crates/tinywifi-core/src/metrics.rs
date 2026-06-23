@@ -45,6 +45,18 @@ pub fn load_average() -> Option<[f64; 3]> {
         .and_then(|c| parse_loadavg(&c))
 }
 
+/// RX and TX byte counters for `iface`, from `/sys/class/net/<iface>/statistics/`.
+pub fn iface_traffic(iface: &str) -> Option<(u64, u64)> {
+    let read_stat = |name: &str| -> Option<u64> {
+        std::fs::read_to_string(format!("/sys/class/net/{iface}/statistics/{name}"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    };
+    Some((read_stat("rx_bytes")?, read_stat("tx_bytes")?))
+}
+
 fn parse_uptime(content: &str) -> Option<u64> {
     content
         .split_whitespace()

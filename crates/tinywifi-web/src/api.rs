@@ -9,11 +9,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use tinywifi_core::{
-    apply_wan, discard_backup, import_tunnel, leases::LeasesReport, load_bypass_list, revert,
-    save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp, stage_wifi,
-    tunnel_down, tunnel_up, update_dhcp, update_wifi, wan_candidates, wan_status, AutoRevert,
-    AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, HostapdConf,
-    SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
+    apply_wan, discard_backup, iface_traffic, import_tunnel, leases::LeasesReport, load_bypass_list,
+    revert, save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp,
+    stage_wifi, tunnel_down, tunnel_up, update_dhcp, update_wifi, wan_candidates, wan_status,
+    AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError,
+    HostapdConf, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError, WifiSettings,
+    AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -92,6 +93,12 @@ pub async fn status(State(st): State<AppState>) -> Json<SystemStatus> {
         &st.ap_interface(),
         &st.config.paths.leases_file,
     ))
+}
+
+pub async fn traffic(State(st): State<AppState>) -> Json<Value> {
+    let iface = st.ap_interface();
+    let (rx, tx) = iface_traffic(&iface).unwrap_or((0, 0));
+    Json(json!({ "iface": iface, "rx_bytes": rx, "tx_bytes": tx }))
 }
 
 pub async fn wifi_get(State(st): State<AppState>) -> ApiResult<WifiConfig> {

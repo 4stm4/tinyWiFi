@@ -8,9 +8,9 @@ use tinywifi_core::file::file_exists;
 use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    scan_tunnels, wan_candidates, wan_status, AwgTunnelStatus, IfaceState,
-    WanConfig, WanMode, AWG_CONF_DIR,
-    interface_ipv4, service_status, DhcpConfig, HostapdConf, ServiceStatus, SystemStatus,
+    iface_traffic, interface_ipv4, scan_tunnels, service_status, wan_candidates, wan_status,
+    AwgTunnelStatus, DhcpConfig, HostapdConf, IfaceState, ServiceStatus, SystemStatus, WanConfig,
+    WanMode, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -55,6 +55,30 @@ const ICO_RAM: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fil
 const ICO_UPTIME: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/></svg>";
 const ICO_LOAD: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 12h4l3 7 4-14 3 7h4\"/></svg>";
 const ICO_DEVICE: &str = "<svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"4\" y=\"4\" width=\"16\" height=\"12\" rx=\"1\"/><path d=\"M9 20h6M12 16v4\"/></svg>";
+const ICO_TRAFFIC: &str = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 3v18M4 17l4 4 4-4M16 21V3M12 7l4-4 4 4\"/></svg>";
+
+/// Polls `/api/traffic` every 5 s and updates the two spans in the traffic tile.
+const TRAFFIC_POLL_SCRIPT: &str = "\
+<script>\n\
+(function(){\n\
+function fb(b){\n\
+  if(b<1024)return b+' B';\n\
+  if(b<1048576)return (b/1024).toFixed(1)+' KB';\n\
+  if(b<1073741824)return (b/1048576).toFixed(1)+' MB';\n\
+  return (b/1073741824).toFixed(2)+' GB';\n\
+}\n\
+function poll(){\n\
+  fetch('/api/traffic').then(function(r){return r.json();}).then(function(d){\n\
+    var rx=document.getElementById('tw-rx');\n\
+    var tx=document.getElementById('tw-tx');\n\
+    if(rx)rx.textContent=fb(d.rx_bytes);\n\
+    if(tx)tx.textContent=fb(d.tx_bytes);\n\
+  }).catch(function(){});\n\
+  setTimeout(poll,5000);\n\
+}\n\
+setTimeout(poll,5000);\n\
+})();\n\
+</script>\n";
 
 /// Theme toggle + early-restore wiring. The inline restore runs in `<head>` so
 /// the stored theme is applied before first paint (no flash).
@@ -141,6 +165,31 @@ fn opt<T: Display>(value: Option<T>) -> String {
     value.map(|v| v.to_string()).unwrap_or_else(|| "—".to_string())
 }
 
+fn fmt_bytes(b: u64) -> String {
+    if b < 1_024 {
+        format!("{b} B")
+    } else if b < 1_048_576 {
+        format!("{:.1} KB", b as f64 / 1_024.0)
+    } else if b < 1_073_741_824 {
+        format!("{:.1} MB", b as f64 / 1_048_576.0)
+    } else {
+        format!("{:.2} GB", b as f64 / 1_073_741_824.0)
+    }
+}
+
+fn traffic_tile(ico: &str, label: &str, rx: u64, tx: u64) -> String {
+    format!(
+        "<div class=\"tile\">\
+         <div class=\"tile__top\"><span class=\"tile__label\">{lab}</span>\
+         <span class=\"tile__ico\">{ico}</span></div>\
+         <div class=\"tile__value\">&#x2193; <span id=\"tw-rx\">{rx_fmt}</span></div>\
+         <div class=\"tile__meta\">&#x2191; <span id=\"tw-tx\">{tx_fmt}</span></div></div>",
+        lab = escape(label),
+        rx_fmt = fmt_bytes(rx),
+        tx_fmt = fmt_bytes(tx),
+    )
+}
+
 fn fmt_uptime(secs: u64) -> String {
     let (d, h, m) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
     if d > 0 {
@@ -184,6 +233,9 @@ pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
         .filter(|l| l.status == LeaseStatus::Active)
         .count();
 
+    // WiFi traffic counters.
+    let (rx_bytes, tx_bytes) = iface_traffic(&iface).unwrap_or((0, 0));
+
     // Stat tiles (big numbers).
     let mem = metrics::memory();
     let ram_value = mem
@@ -219,7 +271,9 @@ pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
         "с перезагрузки",
     ));
     body.push_str(&tile(ICO_LOAD, "Load · Нагрузка", &load_value, &load_meta));
+    body.push_str(&traffic_tile(ICO_TRAFFIC, "Traffic · Трафик", rx_bytes, tx_bytes));
     body.push_str("</div>\n");
+    body.push_str(TRAFFIC_POLL_SCRIPT);
 
     // Network / service status.
     body.push_str("<h2>Состояние</h2>\n<table class=\"tbl\"><tbody>\n");

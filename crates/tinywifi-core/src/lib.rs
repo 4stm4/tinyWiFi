@@ -28,7 +28,7 @@ pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};
 pub use interface::{has_default_route, interface_exists, interface_has_ip, interface_ipv4};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
-pub use metrics::{load_average, memory, uptime_secs, Memory};
+pub use metrics::{iface_traffic, load_average, memory, uptime_secs, Memory};
 pub use nanodhcp::{stage_dhcp, update_dhcp, DhcpConfig, DhcpError, DhcpSettings, DhcpUpdateError};
 pub use safety::{discard_backup, revert, wait_until_running, AutoRevert};
 pub use service::{
