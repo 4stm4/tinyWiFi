@@ -483,153 +483,128 @@ pub fn scan_tunnels(dir: impl AsRef<Path>) -> Vec<AwgTunnel> {
 
 // ── Tunnel lifecycle ──────────────────────────────────────────────────────────
 
-/// Bring a tunnel up: try AmneziaWG first, fall back to standard WireGuard.
-/// Sets up routing and DNS when AllowedIPs covers 0.0.0.0/0.
+/// Path to the awg-quick script deployed alongside the binary.
+const AWG_QUICK_PATH: &str = "/usr/bin/awg-quick";
+
+/// Bring a tunnel up via awg-quick.
+/// awg-quick tries amneziawg kernel module first, then falls back to
+/// amneziawg-go (userspace) if WG_QUICK_USERSPACE_IMPLEMENTATION is set.
+/// It handles interface creation, setconf, addresses, DNS, and routing.
 pub fn tunnel_up(tunnel: &AwgTunnel) -> Result<(), String> {
-    let name = &tunnel.name;
+    let conf = tunnel.config_path.to_str()
+        .ok_or_else(|| "invalid config path".to_string())?;
 
-    // Create interface and configure keys
-    if try_amneziawg(tunnel).is_err() {
-        try_wireguard(tunnel)?;
+    // Load tun module for amneziawg-go userspace fallback
+    let _ = Command::new("modprobe").arg("tun").output();
+
+    let out = Command::new(AWG_QUICK_PATH)
+        .arg("up")
+        .arg(conf)
+        // amneziawg-go is the userspace AmneziaWG implementation;
+        // awg-quick uses it automatically when the kernel module is missing
+        .env("WG_QUICK_USERSPACE_IMPLEMENTATION", "amneziawg-go")
+        .env("PATH", "/usr/bin:/usr/sbin:/sbin:/bin")
+        .output()
+        .map_err(|e| format!("awg-quick: {e}"))?;
+
+    if out.status.success() {
+        // Apply bypass routes on top of what awg-quick set up
+        apply_bypass_routes_if_needed(tunnel);
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        Err(format!("{}{}", stderr.trim(), stdout.trim()))
     }
-
-    // Add IP addresses
-    for addr in &tunnel.iface.addresses {
-        let _ = run_cmd("ip", &["addr", "add", addr, "dev", name]);
-    }
-    run_cmd("ip", &["link", "set", name, "up"])?;
-
-    // Routing
-    setup_routing(tunnel)?;
-
-    // DNS
-    if !tunnel.iface.dns.is_empty() {
-        let content: String = tunnel.iface.dns.iter()
-            .map(|d| format!("nameserver {d}\n"))
-            .collect();
-        let _ = std::fs::write("/etc/resolv.conf", content);
-    }
-
-    Ok(())
 }
 
-fn try_amneziawg(tunnel: &AwgTunnel) -> Result<(), String> {
-    let name = &tunnel.name;
-    let conf = tunnel.config_path.to_str().unwrap_or("");
-    run_cmd("ip", &["link", "add", name, "type", "amneziawg"])?;
-    let bin = awg_binary().ok_or_else(|| "awg not found".to_string())?;
-    run_cmd(bin.to_str().unwrap_or("awg"), &["setconf", name, conf])
-        .map_err(|e| { let _ = run_cmd("ip", &["link", "del", name]); e })
-}
-
-fn try_wireguard(tunnel: &AwgTunnel) -> Result<(), String> {
-    let name = &tunnel.name;
-    let content = std::fs::read_to_string(&tunnel.config_path)
-        .map_err(|e| format!("read config: {e}"))?;
-    let stripped = strip_to_wg_conf(&content);
-    let tmp = format!("/tmp/{name}_wg.conf");
-    std::fs::write(&tmp, &stripped).map_err(|e| format!("write tmp: {e}"))?;
-
-    run_cmd("ip", &["link", "add", name, "type", "wireguard"])?;
-    let bin = wg_binary().ok_or_else(|| {
-        let _ = run_cmd("ip", &["link", "del", name]);
-        "wg binary not found — install wireguard-tools".to_string()
-    })?;
-    run_cmd(bin.to_str().unwrap_or("wg"), &["setconf", name, &tmp])
-        .map_err(|e| { let _ = run_cmd("ip", &["link", "del", name]); e })?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(())
-}
-
-/// Bring a tunnel down, restoring WAN routing.
+/// Bring a tunnel down via awg-quick (restores routing and DNS automatically).
 pub fn tunnel_down(name: &str) -> Result<(), String> {
-    // Restore routing before destroying the interface
+    // Remove bypass routes we added
     if let Some(state) = VpnRouteState::load() {
-        if state.tunnel_name == name && state.full_tunnel {
-            // Restore WAN default route
-            let _ = run_cmd("ip", &["route", "del", "default"]);
-            if !state.wan_gw.is_empty() {
-                let _ = run_cmd(
-                    "ip",
-                    &["route", "add", "default", "via", &state.wan_gw, "dev", &state.wan_dev],
-                );
-            }
-            // Remove direct routes added for VPN endpoints
-            for ep in &state.endpoint_ips {
-                let _ = run_cmd("ip", &["route", "del", ep]);
-            }
-            // Remove bypass routes
+        if state.tunnel_name == name {
             for bp in &state.bypass_ips {
                 let _ = run_cmd("ip", &["route", "del", bp]);
             }
             let _ = std::fs::remove_file(VPN_ROUTE_STATE_PATH);
         }
     }
-    let _ = run_cmd("ip", &["link", "set", name, "down"]);
-    run_cmd("ip", &["link", "del", name])
+
+    let out = Command::new(AWG_QUICK_PATH)
+        .arg("down")
+        .arg(name)
+        .env("PATH", "/usr/bin:/usr/sbin:/sbin:/bin")
+        .output()
+        .map_err(|e| format!("awg-quick: {e}"))?;
+
+    if out.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(stderr.trim().to_string())
+    }
 }
 
-fn setup_routing(tunnel: &AwgTunnel) -> Result<(), String> {
-    let name = &tunnel.name;
-    let full_tunnel = tunnel.peers.iter().any(|p| {
-        p.allowed_ips.iter().any(|ip| ip.starts_with("0.0.0.0/0"))
-    });
+/// Add bypass routes after the VPN is up (so specific IPs/CIDRs skip the tunnel).
+fn apply_bypass_routes_if_needed(tunnel: &AwgTunnel) {
+    let full_tunnel = tunnel.peers.iter()
+        .any(|p| p.allowed_ips.iter().any(|ip| ip.starts_with("0.0.0.0/0")));
+    if !full_tunnel { return; }
 
-    let endpoint_ips: Vec<String> = tunnel.peers.iter()
-        .filter_map(|p| p.endpoint.as_ref())
-        .filter_map(|ep| ep.rsplit_once(':').map(|(host, _)| host.to_string())
-            .or_else(|| ep.split(':').next().map(|s| s.to_string())))
-        .filter(|s| !s.is_empty())
-        .collect();
+    let Some((wan_gw, wan_dev)) = current_default_route_pre_vpn() else { return };
 
-    if full_tunnel {
-        let (wan_gw, wan_dev) = current_default_gateway()
-            .ok_or_else(|| "no default gateway — WAN not configured".to_string())?;
-
-        // Add direct routes for VPN endpoints so the tunnel can reach the server
-        for ep in &endpoint_ips {
-            let _ = run_cmd("ip", &["route", "add", ep, "via", &wan_gw, "dev", &wan_dev]);
-        }
-
-        // Apply bypass list (IPs/CIDRs that skip VPN)
-        let bypass = load_bypass_list();
-        for entry in &bypass {
-            let _ = run_cmd("ip", &["route", "add", entry, "via", &wan_gw, "dev", &wan_dev]);
-        }
-
-        // Save state before replacing default route (tunnel_down will use it)
-        VpnRouteState {
-            tunnel_name: name.clone(),
-            wan_gw: wan_gw.clone(),
-            wan_dev: wan_dev.clone(),
-            endpoint_ips: endpoint_ips.clone(),
-            bypass_ips: bypass,
-            full_tunnel: true,
-        }.save();
-
-        // Replace default route with tunnel
-        let _ = run_cmd("ip", &["route", "del", "default"]);
-        run_cmd("ip", &["route", "add", "default", "dev", name])?;
-    } else {
-        // Specific AllowedIPs: add per-network routes
-        for peer in &tunnel.peers {
-            for allowed_ip in &peer.allowed_ips {
-                if !allowed_ip.starts_with(':') {
-                    let _ = run_cmd("ip", &["route", "add", allowed_ip, "dev", name]);
-                }
-            }
+    let bypass = load_bypass_list();
+    let mut applied: Vec<String> = Vec::new();
+    for entry in &bypass {
+        if run_cmd("ip", &["route", "add", entry, "via", &wan_gw, "dev", &wan_dev]).is_ok() {
+            applied.push(entry.clone());
         }
     }
+
+    VpnRouteState {
+        tunnel_name: tunnel.name.clone(),
+        wan_gw,
+        wan_dev,
+        endpoint_ips: Vec::new(),
+        bypass_ips: applied,
+        full_tunnel: true,
+    }.save();
+}
+
+/// Read the pre-VPN default gateway from the routing table.
+/// awg-quick adds a suppress_prefixlength rule, so the WAN default is still
+/// visible in `ip route show table main` even after VPN is up.
+fn current_default_route_pre_vpn() -> Option<(String, String)> {
+    // Try fwmark table first, then main
+    for table in &["main", "0"] {
+        if let Some(pair) = read_default_from_table(table) {
+            return Some(pair);
+        }
+    }
+    None
+}
+
+fn setup_routing(_tunnel: &AwgTunnel) -> Result<(), String> {
+    // Routing is fully managed by awg-quick now.
+    // This stub is kept so existing callers compile.
     Ok(())
 }
 
-fn current_default_gateway() -> Option<(String, String)> {
+#[allow(dead_code)]
+fn try_amneziawg(_tunnel: &AwgTunnel) -> Result<(), String> { Ok(()) }
+#[allow(dead_code)]
+fn try_wireguard(_tunnel: &AwgTunnel) -> Result<(), String> { Ok(()) }
+
+fn read_default_from_table(table: &str) -> Option<(String, String)> {
     let out = Command::new("ip")
-        .args(["route", "show", "default"])
+        .args(["route", "show", "table", table, "default"])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.lines().next()?;
+    parse_default_route(text.lines().next()?)
+}
+
+fn parse_default_route(line: &str) -> Option<(String, String)> {
     let words: Vec<&str> = line.split_whitespace().collect();
     let mut gw = String::new();
     let mut dev = String::new();
@@ -638,6 +613,11 @@ fn current_default_gateway() -> Option<(String, String)> {
         if w == "dev" { dev = words.get(i + 1).copied().unwrap_or("").to_string(); }
     }
     if gw.is_empty() { None } else { Some((gw, dev)) }
+}
+
+#[allow(dead_code)]
+fn current_default_gateway() -> Option<(String, String)> {
+    read_default_from_table("main")
 }
 
 // ── Bypass list ───────────────────────────────────────────────────────────────
@@ -702,7 +682,14 @@ pub fn import_tunnel(
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
     let path = conf_dir.as_ref().join(format!("{safe_name}.conf"));
-    std::fs::write(&path, &conf_text).map_err(ImportError::Write)?;
+    // Strip lines with empty values — awg setconf rejects them (e.g. "I2 = ")
+    let cleaned: String = conf_text.lines()
+        .filter(|line| {
+            if let Some((_k, v)) = line.split_once('=') { !v.trim().is_empty() } else { true }
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect();
+    std::fs::write(&path, &cleaned).map_err(ImportError::Write)?;
     Ok(path)
 }
 
