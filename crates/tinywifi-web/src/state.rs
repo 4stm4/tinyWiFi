@@ -16,6 +16,7 @@ pub struct AppState {
     pub config: Arc<TinywifiConfig>,
     pub pending: PendingReverts,
     pub sessions: auth::Sessions,
+    pub login_attempts: auth::LoginAttempts,
 }
 
 impl AppState {
@@ -24,6 +25,7 @@ impl AppState {
             config: Arc::new(config),
             pending: Arc::new(Mutex::new(HashMap::new())),
             sessions: auth::new_sessions(),
+            login_attempts: auth::new_login_attempts(),
         }
     }
 

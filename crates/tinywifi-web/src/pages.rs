@@ -153,10 +153,10 @@ pub async fn index() -> Redirect {
 }
 
 pub async fn login(axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>) -> Html<String> {
-    let error_html = if params.get("err").map(String::as_str) == Some("1") {
-        "<p class=\"login-error\">Неверный пароль</p>"
-    } else {
-        ""
+    let error_html = match params.get("err").map(String::as_str) {
+        Some("1") => "<p class=\"login-error\">Неверный пароль</p>",
+        Some("2") => "<p class=\"login-error\">Слишком много попыток — подождите 5 минут</p>",
+        _ => "",
     };
     Html(format!(
         "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\

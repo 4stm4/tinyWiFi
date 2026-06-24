@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{ConnectInfo, Form, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
+use std::net::SocketAddr;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -352,10 +353,16 @@ pub struct LoginForm {
 
 pub async fn login_post(
     State(st): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Form(form): Form<LoginForm>,
 ) -> Response {
+    let ip = addr.ip();
+    if auth::is_banned(&st.login_attempts, ip) {
+        return Redirect::to("/login?err=2").into_response();
+    }
     let hash = auth::read_hash().unwrap_or_default();
     if auth::verify_password(&form.password, &hash) {
+        auth::record_success(&st.login_attempts, ip);
         auth::maybe_upgrade_hash(&form.password);
         let token = auth::session_create(&st.sessions);
         let cookie = format!(
@@ -365,6 +372,7 @@ pub async fn login_post(
         );
         ([(header::SET_COOKIE, cookie)], Redirect::to("/dashboard")).into_response()
     } else {
+        auth::record_failure(&st.login_attempts, ip);
         Redirect::to("/login?err=1").into_response()
     }
 }

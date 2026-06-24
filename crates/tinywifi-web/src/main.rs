@@ -9,6 +9,8 @@ mod tests;
 
 use std::process::ExitCode;
 
+use std::net::SocketAddr;
+
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
@@ -122,7 +124,7 @@ async fn main() -> ExitCode {
     };
 
     println!("tinywifi-web {} listening on {listen}", tinywifi_core::VERSION);
-    if let Err(e) = axum::serve(listener, app)
+    if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await
     {

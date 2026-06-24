@@ -5,6 +5,7 @@
 //! every server restart, which is fine for an embedded device.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,10 +20,66 @@ const DEFAULT_MARKER: &str = "/etc/tinywifi/auth.default";
 const DEFAULT_PASSWORD: &str = "admin";
 const SESSION_TTL: Duration = Duration::from_secs(86400);
 
+/// Brute-force protection: max failed attempts before IP is banned.
+const MAX_ATTEMPTS: u32 = 10;
+/// Window over which failed attempts are counted.
+const ATTEMPT_WINDOW: Duration = Duration::from_secs(60);
+/// How long a banned IP is locked out.
+const BAN_DURATION: Duration = Duration::from_secs(300);
+
 pub type Sessions = Arc<Mutex<HashMap<String, Instant>>>;
+
+pub(crate) struct AttemptState {
+    count: u32,
+    window_start: Instant,
+    banned_until: Option<Instant>,
+}
+
+/// Per-IP login attempt tracker. In-memory; resets on server restart.
+pub type LoginAttempts = Arc<Mutex<HashMap<IpAddr, AttemptState>>>;
 
 pub fn new_sessions() -> Sessions {
     Arc::new(Mutex::new(HashMap::new()))
+}
+
+pub fn new_login_attempts() -> LoginAttempts {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Returns true if this IP is currently banned.
+pub fn is_banned(attempts: &LoginAttempts, ip: IpAddr) -> bool {
+    let map = attempts.lock().unwrap();
+    match map.get(&ip) {
+        Some(s) => s.banned_until.map_or(false, |t| t > Instant::now()),
+        None => false,
+    }
+}
+
+/// Record a failed login attempt. Bans the IP after MAX_ATTEMPTS in the window.
+pub fn record_failure(attempts: &LoginAttempts, ip: IpAddr) {
+    let mut map = attempts.lock().unwrap();
+    let now = Instant::now();
+    let entry = map.entry(ip).or_insert(AttemptState {
+        count: 0,
+        window_start: now,
+        banned_until: None,
+    });
+    // Reset window if it has expired.
+    if now.duration_since(entry.window_start) >= ATTEMPT_WINDOW {
+        entry.count = 0;
+        entry.window_start = now;
+    }
+    entry.count += 1;
+    if entry.count >= MAX_ATTEMPTS {
+        entry.banned_until = Some(now + BAN_DURATION);
+        entry.count = 0;
+        entry.window_start = now;
+    }
+}
+
+/// Clear the attempt counter for an IP after a successful login.
+pub fn record_success(attempts: &LoginAttempts, ip: IpAddr) {
+    attempts.lock().unwrap().remove(&ip);
 }
 
 /// Generate a random 32-byte hex token and add it to the session store.

@@ -1,0 +1,47 @@
+flush ruleset
+
+# ── TinyWifi nftables ruleset ─────────────────────────────────────────────────
+#
+# Loaded by S10tinywifi at boot via: nft -f /etc/nftables/tinywifi.nft
+#
+# Per-IP rate limits use anonymous meters with "limit rate over" semantics:
+# the drop verdict fires only when the rate IS exceeded.
+# Thresholds for a home/small-office AP:
+#   - 50 new connections/sec per WiFi client   (forward)
+#   - 10 ICMP packets/sec per WiFi client      (forward)
+
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy accept;
+
+        # Drop conntrack-invalid packets early.
+        ct state invalid drop
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+
+        # Per-client new-connection rate limit.
+        # Blocks port scans and SYN floods from WiFi clients.
+        # "limit rate over 50/second" fires the drop when the rate IS exceeded.
+        ip saddr 192.168.44.0/24 ct state new \
+            meter wificonn { ip saddr timeout 10s limit rate over 50/second burst 100 packets } \
+            drop
+
+        # Per-client ICMP rate limit. Blocks ping floods toward the internet.
+        ip saddr 192.168.44.0/24 ip protocol icmp \
+            meter wifiicmp { ip saddr timeout 10s limit rate over 10/second burst 20 packets } \
+            drop
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}
+
+table ip nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr 192.168.44.0/24 masquerade
+    }
+}
