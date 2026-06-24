@@ -29,7 +29,7 @@ pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};
 pub use interface::{has_default_route, interface_exists, interface_has_ip, interface_ipv4};
 pub use leases::{Lease, LeaseStatus, LeasesReport, LeasesState};
-pub use metrics::{iface_traffic, load_average, memory, uptime_secs, Memory};
+pub use metrics::{hostname, iface_traffic, kernel_version, load_average, memory, ntp_servers, uptime_secs, Memory};
 pub use nanodhcp::{
     add_static_lease, list_static_leases, remove_static_lease, stage_dhcp, update_dhcp, DhcpConfig,
     DhcpError, DhcpSettings, DhcpUpdateError, StaticLease, StaticLeaseError,

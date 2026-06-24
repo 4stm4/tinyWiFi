@@ -9,7 +9,8 @@ use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::{AclMode, AclState};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    interface_ipv4, list_static_leases, scan_tunnels, service_status, wan_candidates,
+    hostname, interface_ipv4, kernel_version, list_static_leases, ntp_servers, scan_tunnels,
+    service_status, wan_candidates,
     wan_status, AwgTunnelStatus, DhcpConfig, HostapdConf, IfaceState, ServiceStatus, SystemStatus,
     WanConfig, WanMode, AWG_CONF_DIR,
 };
@@ -949,6 +950,21 @@ async function twChangePassword(btn){\n\
 pub async fn system(State(st): State<AppState>) -> Html<String> {
     let s = &st.config.services;
     let p = &st.config.paths;
+
+    // ── About ─────────────────────────────────────────────────────────────────
+    let host = hostname();
+    let kernel = kernel_version();
+    let ntp_svrs = ntp_servers();
+    let ntp_status = service_status("openntpd");
+
+    let mut body = String::new();
+    body.push_str("<table class=\"tbl\" style=\"margin-bottom:1.5rem\"><tbody>\n");
+    body.push_str(&row("TinyWifi", tinywifi_core::VERSION));
+    body.push_str(&row("Хост", &escape(&host)));
+    body.push_str(&row("Ядро", &escape(&kernel)));
+    body.push_str("</tbody></table>\n");
+
+    // ── Services ──────────────────────────────────────────────────────────────
     let items: [(&str, &str, Option<&std::path::Path>); 4] = [
         ("Wi-Fi (hostapd)", &s.hostapd, Some(p.hostapd_conf.as_path())),
         ("DHCP (nanodhcp)", &s.nanodhcp, Some(p.nanodhcp_conf.as_path())),
@@ -956,8 +972,9 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
         ("Display", &s.display, None),
     ];
 
-    let mut body = String::from(
-        "<table class=\"tbl\">\n<thead><tr><th>Сервис</th><th>Статус</th><th></th></tr></thead>\n<tbody>\n",
+    body.push_str(
+        "<h2>Сервисы</h2>\n\
+         <table class=\"tbl\">\n<thead><tr><th>Сервис</th><th>Статус</th><th></th></tr></thead>\n<tbody>\n",
     );
     for (label, unit, config) in items {
         let status = service_status(unit);
@@ -966,27 +983,34 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
         if missing_config {
             status_cell.push_str(" <span class=\"tag\">config missing</span>");
         }
-        let disabled = if status == ServiceStatus::Missing {
-            " disabled"
-        } else {
-            ""
-        };
+        let disabled = if status == ServiceStatus::Missing { " disabled" } else { "" };
         let button = format!(
             "<button class=\"btn btn--ghost btn--sm\" \
              onclick=\"act('/api/services/{}/restart', this)\"{}>Restart</button>",
-            escape(unit),
-            disabled
+            escape(unit), disabled
         );
         body.push_str(&format!(
             "<tr><td class=\"col-host\">{}</td><td>{}</td><td class=\"num\">{}</td></tr>\n",
-            escape(label),
-            status_cell,
-            button
+            escape(label), status_cell, button
         ));
     }
+    // NTP row — no restart button (not in managed services list)
+    let ntp_cell = {
+        let mut s = pill(&format!("{ntp_status:?}"));
+        if !ntp_svrs.is_empty() {
+            s.push_str(&format!(
+                " <span class=\"note\" style=\"margin-left:.5rem\">{}</span>",
+                escape(&ntp_svrs.join(", "))
+            ));
+        }
+        s
+    };
+    body.push_str(&format!(
+        "<tr><td>NTP (openntpd)</td><td>{ntp_cell}</td><td></td></tr>\n"
+    ));
     body.push_str("</tbody></table>\n");
 
-    // Security — password change
+    // ── Security ──────────────────────────────────────────────────────────────
     body.push_str(
         "<h2>Безопасность</h2>\n\
          <div class=\"form-grid\" style=\"max-width:480px\">\
@@ -1009,6 +1033,7 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
          </div>\n",
     );
 
+    // ── Reboot ────────────────────────────────────────────────────────────────
     body.push_str(
         "<h2>Устройство</h2>\n\
          <div class=\"danger-zone\">\

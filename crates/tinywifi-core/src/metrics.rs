@@ -57,6 +57,36 @@ pub fn iface_traffic(iface: &str) -> Option<(u64, u64)> {
     Some((read_stat("rx_bytes")?, read_stat("tx_bytes")?))
 }
 
+/// Device hostname, from `/proc/sys/kernel/hostname`.
+pub fn hostname() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Kernel release string, from `/proc/sys/kernel/osrelease`.
+pub fn kernel_version() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// NTP server lines from `/etc/openntpd/ntpd.conf` (`servers` / `server` directives).
+pub fn ntp_servers() -> Vec<String> {
+    std::fs::read_to_string("/etc/openntpd/ntpd.conf")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let t = line.trim();
+            if t.starts_with("servers ") || t.starts_with("server ") {
+                t.splitn(2, ' ').nth(1).map(str::trim).map(String::from)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn parse_uptime(content: &str) -> Option<u64> {
     content
         .split_whitespace()
