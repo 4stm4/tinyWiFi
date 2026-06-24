@@ -9,10 +9,10 @@ use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::{AclMode, AclState};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    hostname, interface_ipv4, kernel_version, list_static_leases, ntp_servers, scan_tunnels,
-    service_status, wan_candidates,
-    wan_status, AwgTunnelStatus, DhcpConfig, HostapdConf, IfaceState, ServiceStatus, SystemStatus,
-    WanConfig, WanMode, AWG_CONF_DIR,
+    get_dns_settings, hostname, interface_ipv4, kernel_version, list_dns_records, list_static_leases,
+    ntp_servers, scan_tunnels, service_status, wan_candidates, wan_status, AwgTunnelStatus,
+    DhcpConfig, HostapdConf, IfaceState, ServiceStatus, SystemStatus, WanConfig, WanMode,
+    AWG_CONF_DIR,
 };
 
 use crate::auth;
@@ -24,6 +24,7 @@ const NAV: &[(&str, &str)] = &[
     ("/dashboard", "Панель"),
     ("/wifi", "Wi-Fi"),
     ("/dhcp", "DHCP"),
+    ("/dns", "DNS"),
     ("/leases", "Клиенты"),
     ("/wan", "WAN"),
     ("/vpn", "VPN"),
@@ -594,6 +595,154 @@ async function aclSetMode(mode){\n\
 }\n\
 </script>\n";
 
+pub async fn dns(State(st): State<AppState>) -> Html<String> {
+    let path = &st.config.paths.nanodns_conf;
+    let settings = get_dns_settings(path).unwrap_or_default();
+    let records = list_dns_records(path).unwrap_or_default();
+
+    let mut body = String::new();
+
+    // ── Section 1: Zone settings ───────────────────────────────────────────
+    let upstreams_val = settings.upstreams.join(", ");
+    body.push_str(&format!(
+        "<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n\
+         <h2 style=\"margin:0 0 .75rem\">Зона и серверы</h2>\n\
+         <form onsubmit=\"return false\">\n\
+         <div class=\"form-grid\">\n\
+         <div class=\"field\">\
+         <label for=\"dns-domain\">Локальная зона <span class=\"en\">domain</span></label>\
+         <input id=\"dns-domain\" value=\"{domain}\" placeholder=\"lan\">\
+         </div>\n\
+         <div class=\"field field--full\">\
+         <label for=\"dns-upstreams\">Upstream DNS <span class=\"en\">через запятую</span></label>\
+         <input id=\"dns-upstreams\" value=\"{upstreams}\" placeholder=\"1.1.1.1:53, 8.8.8.8:53\">\
+         </div>\n\
+         </div>\n\
+         <div class=\"form-actions\">\
+         <button class=\"btn btn--primary\" onclick=\"dnsSaveSettings(this)\">Применить</button>\
+         <span id=\"dns-settings-result\" class=\"note\" role=\"status\"></span>\
+         </div>\n\
+         </form>\n\
+         </div></section>\n",
+        domain = escape(&settings.domain),
+        upstreams = escape(&upstreams_val),
+    ));
+
+    // ── Section 2: Static records ──────────────────────────────────────────
+    body.push_str(
+        "<section class=\"card\"><div class=\"card__body\">\n\
+         <h2 style=\"margin:0 0 .75rem\">Статические записи</h2>\n"
+    );
+
+    if records.is_empty() {
+        body.push_str("<div class=\"empty\" style=\"margin:.5rem 0 1rem\">Нет статических записей.</div>\n");
+    } else {
+        body.push_str(
+            "<table class=\"tbl\" style=\"margin-bottom:1rem\">\n\
+             <thead><tr><th>Имя</th><th>Тип</th><th>Адрес</th><th>TTL</th><th></th></tr></thead>\n\
+             <tbody>\n"
+        );
+        for rec in &records {
+            body.push_str(&format!(
+                "<tr>\
+                 <td><code>{name}</code></td>\
+                 <td>{rtype}</td>\
+                 <td>{value}</td>\
+                 <td class=\"num\">{ttl}</td>\
+                 <td class=\"num\">\
+                 <button class=\"btn btn--ghost btn--sm\" \
+                 onclick=\"dnsDeleteRecord(this,'{n_esc}','{t_esc}')\" \
+                 >✕</button>\
+                 </td>\
+                 </tr>\n",
+                name = escape(&rec.name),
+                rtype = escape(&rec.rtype),
+                value = escape(&rec.value),
+                ttl = rec.ttl,
+                n_esc = escape(&rec.name),
+                t_esc = escape(&rec.rtype),
+            ));
+        }
+        body.push_str("</tbody></table>\n");
+    }
+
+    // Add record form
+    body.push_str(
+        "<div class=\"form-grid\" style=\"margin-top:.5rem\">\n\
+         <div class=\"field\">\
+         <label for=\"dns-rec-name\">Имя <span class=\"en\">name</span></label>\
+         <input id=\"dns-rec-name\" placeholder=\"myserver.lan\">\
+         </div>\n\
+         <div class=\"field\">\
+         <label for=\"dns-rec-type\">Тип</label>\
+         <select id=\"dns-rec-type\"><option>A</option></select>\
+         </div>\n\
+         <div class=\"field\">\
+         <label for=\"dns-rec-value\">Адрес <span class=\"en\">value</span></label>\
+         <input id=\"dns-rec-value\" placeholder=\"192.168.44.50\">\
+         </div>\n\
+         <div class=\"field\">\
+         <label for=\"dns-rec-ttl\">TTL</label>\
+         <input id=\"dns-rec-ttl\" value=\"60\" style=\"width:80px\">\
+         </div>\n\
+         </div>\n\
+         <div class=\"form-actions\">\
+         <button class=\"btn btn--primary btn--sm\" onclick=\"dnsAddRecord(this)\">Добавить</button>\
+         <span id=\"dns-rec-result\" class=\"note\" role=\"status\"></span>\
+         </div>\n\
+         </div></section>\n"
+    );
+
+    body.push_str(DNS_SCRIPT);
+    layout("Разрешение имён", "DNS", "/dns", &body)
+}
+
+const DNS_SCRIPT: &str = "\
+<script>\n\
+async function dnsSaveSettings(btn){\n\
+  var out=document.getElementById('dns-settings-result');\n\
+  btn.disabled=true;out.style.color='';out.textContent='Применяю…';\n\
+  var domain=document.getElementById('dns-domain').value.trim();\n\
+  var ups=document.getElementById('dns-upstreams').value.split(',').map(function(s){return s.trim();}).filter(Boolean);\n\
+  try{\n\
+    var r=await fetch('/api/dns',{method:'POST',headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({domain:domain,upstreams:ups})});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';out.textContent='Применено ✓';setTimeout(function(){location.reload();},1000);}\n\
+    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+  btn.disabled=false;\n\
+}\n\
+async function dnsAddRecord(btn){\n\
+  var out=document.getElementById('dns-rec-result');\n\
+  var name=document.getElementById('dns-rec-name').value.trim();\n\
+  var rtype=document.getElementById('dns-rec-type').value;\n\
+  var value=document.getElementById('dns-rec-value').value.trim();\n\
+  var ttl=parseInt(document.getElementById('dns-rec-ttl').value,10)||60;\n\
+  if(!name||!value){out.style.color='red';out.textContent='Заполните имя и адрес';return;}\n\
+  btn.disabled=true;out.style.color='';out.textContent='Добавление…';\n\
+  try{\n\
+    var r=await fetch('/api/dns/records',{method:'POST',headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({name:name,rtype:rtype,value:value,ttl:ttl})});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';out.textContent='Добавлено ✓';setTimeout(function(){location.reload();},700);}\n\
+    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+  btn.disabled=false;\n\
+}\n\
+async function dnsDeleteRecord(btn,name,rtype){\n\
+  var out=document.getElementById('dns-rec-result');\n\
+  btn.disabled=true;out.style.color='';out.textContent='Удаление…';\n\
+  try{\n\
+    var r=await fetch('/api/dns/records',{method:'DELETE',headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({name:name,rtype:rtype})});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){btn.closest('tr').remove();out.style.color='green';out.textContent='Удалено ✓';setTimeout(function(){out.textContent='';},2000);}\n\
+    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);btn.disabled=false;}\n\
+  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;btn.disabled=false;}\n\
+}\n\
+</script>\n";
+
 pub async fn wan(_st: State<AppState>) -> Html<String> {
     let candidates = wan_candidates();
     let saved = WanConfig::load();
@@ -965,9 +1114,10 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
     body.push_str("</tbody></table>\n");
 
     // ── Services ──────────────────────────────────────────────────────────────
-    let items: [(&str, &str, Option<&std::path::Path>); 4] = [
+    let items: [(&str, &str, Option<&std::path::Path>); 5] = [
         ("Wi-Fi (hostapd)", &s.hostapd, Some(p.hostapd_conf.as_path())),
         ("DHCP (nanodhcp)", &s.nanodhcp, Some(p.nanodhcp_conf.as_path())),
+        ("DNS (nanodns)", &s.nanodns, Some(p.nanodns_conf.as_path())),
         ("Web UI", &s.web, None),
         ("Display", &s.display, None),
     ];

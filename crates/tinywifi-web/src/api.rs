@@ -10,13 +10,14 @@ use serde_json::{json, Value};
 
 use crate::auth;
 use tinywifi_core::{
-    add_static_lease, apply_wan, discard_backup, iface_traffic, import_tunnel,
-    leases::LeasesReport, list_static_leases, load_bypass_list, remove_static_lease, revert,
-    save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp, stage_wifi,
-    tunnel_down, tunnel_up, update_dhcp, update_wifi, wan_candidates, wan_status, AutoRevert,
-    AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, HostapdConf,
-    StaticLease, StaticLeaseError, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError,
-    WifiSettings, AWG_CONF_DIR,
+    add_dns_record, add_static_lease, apply_wan, discard_backup, get_dns_settings, iface_traffic,
+    import_tunnel, leases::LeasesReport, list_dns_records, list_static_leases, load_bypass_list,
+    remove_dns_record, remove_static_lease, revert, save_bypass_list, scan_tunnels,
+    service_restart, service_status, stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp,
+    update_dns_settings, update_wifi, wan_candidates, wan_status, AutoRevert, AwgTunnel,
+    AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, DnsRecord, DnsRecordError,
+    HostapdConf, NanoDnsSettings, StaticLease, StaticLeaseError, SystemStatus, WanConfig,
+    WanStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -492,4 +493,55 @@ pub async fn acl_unblock(
         .apply(&st.config.paths.hostapd_conf, &st.config.services.hostapd)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(ok())
+}
+
+// ── DNS ───────────────────────────────────────────────────────────────────────
+
+pub async fn dns_get(State(st): State<AppState>) -> Json<Value> {
+    let path = &st.config.paths.nanodns_conf;
+    let settings = get_dns_settings(path).unwrap_or_default();
+    let records = list_dns_records(path).unwrap_or_default();
+    Json(json!({ "settings": settings, "records": records }))
+}
+
+pub async fn dns_settings_post(
+    State(st): State<AppState>,
+    Json(settings): Json<NanoDnsSettings>,
+) -> Result<Json<Value>, ApiError> {
+    update_dns_settings(&st.config.paths.nanodns_conf, &settings)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(ok())
+}
+
+pub async fn dns_records_post(
+    State(st): State<AppState>,
+    Json(record): Json<DnsRecord>,
+) -> Result<Json<Value>, ApiError> {
+    add_dns_record(&st.config.paths.nanodns_conf, &record)
+        .map_err(dns_record_error)?;
+    Ok(ok())
+}
+
+#[derive(serde::Deserialize)]
+pub struct DnsRecordKey {
+    pub name: String,
+    pub rtype: String,
+}
+
+pub async fn dns_records_delete(
+    State(st): State<AppState>,
+    Json(key): Json<DnsRecordKey>,
+) -> Result<Json<Value>, ApiError> {
+    remove_dns_record(&st.config.paths.nanodns_conf, &key.name, &key.rtype)
+        .map_err(dns_record_error)?;
+    Ok(ok())
+}
+
+fn dns_record_error(e: DnsRecordError) -> ApiError {
+    let status = match &e {
+        DnsRecordError::DuplicateName(_) => StatusCode::CONFLICT,
+        DnsRecordError::NotFound(_) => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    ApiError::new(status, e.to_string())
 }

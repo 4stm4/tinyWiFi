@@ -55,6 +55,7 @@ fn build_router(state: AppState) -> Router {
         .route("/dashboard", get(pages::dashboard))
         .route("/wifi", get(pages::wifi))
         .route("/dhcp", get(pages::dhcp))
+        .route("/dns", get(pages::dns))
         .route("/leases", get(pages::leases))
         .route("/system", get(pages::system))
         .route("/wan", get(pages::wan))
@@ -76,6 +77,8 @@ fn build_router(state: AppState) -> Router {
         .route("/api/acl", get(api::acl_get).post(api::acl_post))
         .route("/api/acl/block", post(api::acl_block))
         .route("/api/acl/unblock", post(api::acl_unblock))
+        .route("/api/dns", get(api::dns_get).post(api::dns_settings_post))
+        .route("/api/dns/records", post(api::dns_records_post).delete(api::dns_records_delete))
         .route("/api/services", get(api::services))
         .route(
             "/api/services/:name/restart",

@@ -13,6 +13,7 @@ pub mod interface;
 pub mod leases;
 pub mod metrics;
 pub mod nanodhcp;
+pub mod nanodns;
 pub mod safety;
 pub mod service;
 pub mod status;
@@ -45,6 +46,10 @@ pub use wan::{
     WAN_CONF_PATH,
 };
 pub use acl::{AclMode, AclState, ACL_STATE_FILE};
+pub use nanodns::{
+    add_dns_record, get_dns_settings, list_dns_records, remove_dns_record, update_dns_settings,
+    DnsError, DnsRecord, DnsRecordError, NanoDnsSettings,
+};
 pub use wifi::{stage_wifi, update_wifi, WifiError, WifiSettings};
 
 /// Crate version, surfaced in the dashboard and on the display.

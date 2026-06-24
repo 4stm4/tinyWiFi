@@ -36,6 +36,7 @@ pub struct DisplayConfig {
 pub struct Paths {
     pub hostapd_conf: PathBuf,
     pub nanodhcp_conf: PathBuf,
+    pub nanodns_conf: PathBuf,
     pub leases_file: PathBuf,
 }
 
@@ -43,6 +44,7 @@ pub struct Paths {
 pub struct Services {
     pub hostapd: String,
     pub nanodhcp: String,
+    pub nanodns: String,
     pub web: String,
     pub display: String,
 }
@@ -100,8 +102,10 @@ mod tests {
         assert_eq!(cfg.web.listen, "0.0.0.0:8080");
         assert_eq!(cfg.display.refresh_secs, 10);
         assert_eq!(cfg.paths.nanodhcp_conf, PathBuf::from("/etc/nanodhcp/nanodhcp.conf"));
+        assert_eq!(cfg.paths.nanodns_conf, PathBuf::from("/etc/nanodns/config"));
         assert_eq!(cfg.paths.leases_file, PathBuf::from("/var/lib/nanodhcp/leases"));
         assert_eq!(cfg.services.hostapd, "hostapd");
+        assert_eq!(cfg.services.nanodns, "nanodns");
         assert_eq!(cfg.services.display, "tinywifi-display");
     }
 }

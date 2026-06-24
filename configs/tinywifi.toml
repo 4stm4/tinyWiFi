@@ -11,10 +11,12 @@ refresh_secs = 10
 [paths]
 hostapd_conf = "/etc/hostapd/hostapd.conf"
 nanodhcp_conf = "/etc/nanodhcp/nanodhcp.conf"
+nanodns_conf = "/etc/nanodns/config"
 leases_file = "/var/lib/nanodhcp/leases"
 
 [services]
 hostapd = "hostapd"
 nanodhcp = "nanodhcp"
+nanodns = "nanodns"
 web = "tinywifi-web"
 display = "tinywifi-display"
