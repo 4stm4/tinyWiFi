@@ -1145,4 +1145,9 @@ body { overflow: auto; min-height: 100vh; display: block; }
   background: rgba(230,170,0,.12); border-bottom: 1px solid rgba(230,170,0,.25);
   color: var(--fg-1);
 }
+
+/* ── i18n: dual-language spans ──────────────────────────────────────────── */
+/* Default is Russian; "en" hides Russian spans and shows English ones.     */
+html:not([data-lang="en"]) .t-en { display: none }
+html[data-lang="en"] .t-ru { display: none }
 .alert--warn a { color: var(--accent); }

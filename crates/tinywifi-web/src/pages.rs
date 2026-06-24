@@ -18,18 +18,6 @@ use tinywifi_core::{
 use crate::auth;
 use crate::state::AppState;
 
-/// Top navigation: (href, Russian label). The English page name is passed by
-/// each handler and drives the document `<title>` and the page-head eyebrow.
-const NAV: &[(&str, &str)] = &[
-    ("/dashboard", "Панель"),
-    ("/wifi", "Wi-Fi"),
-    ("/dhcp", "DHCP"),
-    ("/dns", "DNS"),
-    ("/leases", "Клиенты"),
-    ("/wan", "WAN"),
-    ("/vpn", "VPN"),
-    ("/system", "Система"),
-];
 
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -66,6 +54,15 @@ const THEME_SCRIPT: &str = "<script>\n\
 function twToggleTheme(){var d=document.documentElement;\
 var n=d.dataset.theme==='light'?'dark':'light';d.dataset.theme=n;\
 try{localStorage.setItem('tw-theme',n);}catch(e){}}\n\
+function _applyLang(lang){\
+document.querySelectorAll('option[data-ru]').forEach(function(o){\
+o.textContent=lang==='en'?o.dataset.en:o.dataset.ru;});}\n\
+function twToggleLang(){var d=document.documentElement;\
+var n=d.dataset.lang==='en'?'ru':'en';d.dataset.lang=n;\
+try{localStorage.setItem('tw-lang',n);}catch(e){}\
+_applyLang(n);}\n\
+(function(){var l=document.documentElement.dataset.lang;if(l)_applyLang(l);})();\n\
+function t(ru,en){return document.documentElement.dataset.lang==='en'?en:ru;}\n\
 </script>\n";
 
 /// A 3-bar signal indicator. Real RSSI is not in the lease data, so the level
@@ -100,23 +97,37 @@ fn pill(text: &str) -> String {
     )
 }
 
+/// Nav items: (href, Russian label, English label).
+const NAV_I18N: &[(&str, &str, &str)] = &[
+    ("/dashboard", "Панель",  "Dashboard"),
+    ("/wifi",      "Wi-Fi",   "Wi-Fi"),
+    ("/dhcp",      "DHCP",    "DHCP"),
+    ("/dns",       "DNS",     "DNS"),
+    ("/leases",    "Клиенты", "Clients"),
+    ("/wan",       "WAN",     "WAN"),
+    ("/vpn",       "VPN",     "VPN"),
+    ("/system",    "Система", "System"),
+];
+
 fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
-    let nav = NAV
+    let nav = NAV_I18N
         .iter()
-        .map(|(href, label)| {
+        .map(|(href, ru, eng)| {
             let cls = if *href == active {
                 "tw-nav__item is-active"
             } else {
                 "tw-nav__item"
             };
-            format!("<a class=\"{cls}\" href=\"{href}\">{label}</a>")
+            format!("<a class=\"{cls}\" href=\"{href}\"><span class=\"t-ru\">{ru}</span><span class=\"t-en\">{eng}</span></a>")
         })
         .collect::<Vec<_>>()
         .join("");
     let default_pw_banner = if auth::is_default_password() {
         "<div class=\"alert alert--warn\">\
-         ⚠ Установлен пароль по умолчанию (<b>admin</b>). \
-         <a href=\"/system\">Смените пароль</a> в разделе Система.\
+         ⚠ <span class=\"t-ru\">Установлен пароль по умолчанию (<b>admin</b>). \
+         <a href=\"/system\">Смените пароль</a> в разделе Система.</span>\
+         <span class=\"t-en\">Default password is active (<b>admin</b>). \
+         <a href=\"/system\">Change it</a> in System.</span>\
          </div>\n"
     } else {
         ""
@@ -125,7 +136,8 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
         "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <script>try{{var t=localStorage.getItem('tw-theme');if(t)document.documentElement.dataset.theme=t;}}catch(e){{}}</script>\n\
+         <script>try{{var t=localStorage.getItem('tw-theme');if(t)document.documentElement.dataset.theme=t;\
+         var l=localStorage.getItem('tw-lang');if(l)document.documentElement.dataset.lang=l;}}catch(e){{}}</script>\n\
          <title>TinyWifi — {en}</title>\n\
          <link rel=\"stylesheet\" href=\"/style.css\">\n\
          </head>\n<body>\n\
@@ -133,15 +145,23 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
          <div class=\"topbar__brand\"><span class=\"mark\">{BRAND_MARK}</span>\
          <span class=\"name\">tiny<b>wifi</b></span></div>\n\
          <nav class=\"tw-nav\">{nav}</nav>\n\
-         <button class=\"theme-toggle\" onclick=\"twToggleTheme()\" title=\"Тема\" \
-         aria-label=\"Переключить тему\">{THEME_ICON}</button>\n\
+         <button class=\"theme-toggle\" onclick=\"twToggleLang()\" \
+         title=\"Switch language\" aria-label=\"Switch language\" \
+         style=\"font-size:11px;font-weight:700;letter-spacing:.05em;min-width:32px\">\
+         <span class=\"t-ru\">EN</span><span class=\"t-en\">RU</span></button>\n\
+         <button class=\"theme-toggle\" onclick=\"twToggleTheme()\" title=\"Theme\" \
+         aria-label=\"Toggle theme\">{THEME_ICON}</button>\n\
          <form action=\"/logout\" method=\"post\" style=\"margin-left:8px\">\
-         <button class=\"btn btn--ghost btn--sm\" type=\"submit\">Выйти</button></form>\n\
+         <button class=\"btn btn--ghost btn--sm\" type=\"submit\">\
+         <span class=\"t-ru\">Выйти</span><span class=\"t-en\">Sign out</span>\
+         </button></form>\n\
          </header>\n\
          {default_pw_banner}\
          <main class=\"page\">\n\
          <div class=\"page__head\">\
-         <h1 class=\"page__title\"><span class=\"en\">{en}</span>{title}</h1></div>\n\
+         <h1 class=\"page__title\"><span class=\"en\">{en}</span>\
+         <span class=\"t-ru\">{title}</span>\
+         <span class=\"t-en\">{en}</span></h1></div>\n\
          {body}\n\
          {THEME_SCRIPT}\
          </main>\n</body>\n</html>\n"
@@ -154,16 +174,21 @@ pub async fn index() -> Redirect {
 
 pub async fn login(axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>) -> Html<String> {
     let error_html = match params.get("err").map(String::as_str) {
-        Some("1") => "<p class=\"login-error\">Неверный пароль</p>",
-        Some("2") => "<p class=\"login-error\">Слишком много попыток — подождите 5 минут</p>",
+        Some("1") => "<p class=\"login-error\">\
+                      <span class=\"t-ru\">Неверный пароль</span>\
+                      <span class=\"t-en\">Wrong password</span></p>",
+        Some("2") => "<p class=\"login-error\">\
+                      <span class=\"t-ru\">Слишком много попыток — подождите 5 минут</span>\
+                      <span class=\"t-en\">Too many attempts — wait 5 minutes</span></p>",
         _ => "",
     };
     Html(format!(
         "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <script>try{{var t=localStorage.getItem('tw-theme');if(t)document.documentElement.dataset.theme=t;}}catch(e){{}}</script>\n\
-         <title>TinyWifi — Вход</title>\n\
+         <script>try{{var t=localStorage.getItem('tw-theme');if(t)document.documentElement.dataset.theme=t;\
+         var l=localStorage.getItem('tw-lang');if(l)document.documentElement.dataset.lang=l;}}catch(e){{}}</script>\n\
+         <title>TinyWifi — Login</title>\n\
          <link rel=\"stylesheet\" href=\"/style.css\">\n\
          </head>\n<body>\n\
          <main class=\"login-page\">\n\
@@ -172,13 +197,19 @@ pub async fn login(axum::extract::Query(params): axum::extract::Query<std::colle
          <span class=\"name\">tiny<b>wifi</b></span></div>\n\
          <form method=\"post\" action=\"/login\" class=\"login-form\">\n\
          <div class=\"field\">\
-         <label>Пароль <span class=\"en\">Password</span></label>\
+         <label><span class=\"t-ru\">Пароль</span><span class=\"t-en\">Password</span></label>\
          <input type=\"password\" name=\"password\" autofocus required \
-         placeholder=\"Введите пароль\">\
+         placeholder=\"Password\">\
          </div>\n\
          {error_html}\
-         <button class=\"btn btn--primary\" type=\"submit\" style=\"width:100%\">Войти</button>\n\
+         <button class=\"btn btn--primary\" type=\"submit\" style=\"width:100%\">\
+         <span class=\"t-ru\">Войти</span><span class=\"t-en\">Sign in</span>\
+         </button>\n\
          </form>\n\
+         <div style=\"text-align:center;margin-top:.75rem\">\
+         <button class=\"btn btn--ghost btn--sm\" onclick=\"twToggleLang()\" style=\"font-size:11px;font-weight:700\">\
+         <span class=\"t-ru\">EN</span><span class=\"t-en\">RU</span></button>\
+         </div>\n\
          </div>\n\
          </main>\n\
          {THEME_SCRIPT}\
@@ -205,17 +236,18 @@ fn row(label: &str, value: &str) -> String {
     format!("<tr><th>{}</th><td>{}</td></tr>\n", escape(label), value)
 }
 
-/// One dashboard stat tile. `value` may contain markup (e.g. a `.unit` span);
-/// `label` and `meta` are escaped.
+fn row_html(label: &str, value: &str) -> String {
+    format!("<tr><th>{}</th><td>{}</td></tr>\n", label, value)
+}
+
+/// One dashboard stat tile. `value` and `meta` may contain markup.
 fn tile(ico: &str, label: &str, value: &str, meta: &str) -> String {
     format!(
         "<div class=\"tile\">\
-         <div class=\"tile__top\"><span class=\"tile__label\">{lab}</span>\
+         <div class=\"tile__top\"><span class=\"tile__label\">{label}</span>\
          <span class=\"tile__ico\">{ico}</span></div>\
          <div class=\"tile__value\">{value}</div>\
-         <div class=\"tile__meta\">{met}</div></div>",
-        lab = escape(label),
-        met = escape(meta),
+         <div class=\"tile__meta\">{meta}</div></div>",
     )
 }
 
@@ -254,24 +286,16 @@ pub async fn dashboard(State(st): State<AppState>) -> Html<String> {
         .unwrap_or_default();
 
     let mut body = String::from("<div class=\"tiles\">");
-    body.push_str(&tile(
-        ICO_CLIENTS,
-        "Clients · Клиенты",
-        &clients.to_string(),
-        "активные",
-    ));
-    body.push_str(&tile(ICO_RAM, "RAM · Память", &ram_value, &ram_meta));
-    body.push_str(&tile(
-        ICO_UPTIME,
-        "Uptime · Аптайм",
-        &up_value,
-        "с перезагрузки",
-    ));
-    body.push_str(&tile(ICO_LOAD, "Load · Нагрузка", &load_value, &load_meta));
+    body.push_str(&tile(ICO_CLIENTS, "Clients", &clients.to_string(),
+        "<span class=\"t-ru\">активные</span><span class=\"t-en\">active</span>"));
+    body.push_str(&tile(ICO_RAM, "RAM", &ram_value, &ram_meta));
+    body.push_str(&tile(ICO_UPTIME, "Uptime", &up_value,
+        "<span class=\"t-ru\">с перезагрузки</span><span class=\"t-en\">since reboot</span>"));
+    body.push_str(&tile(ICO_LOAD, "Load", &load_value, &load_meta));
     body.push_str("</div>\n");
 
     // Network / service status.
-    body.push_str("<h2>Состояние</h2>\n<table class=\"tbl\"><tbody>\n");
+    body.push_str("<h2><span class=\"t-ru\">Состояние</span><span class=\"t-en\">Status</span></h2>\n<table class=\"tbl\"><tbody>\n");
     body.push_str(&row("Wi-Fi (hostapd)", &pill(&format!("{:?}", status.hostapd))));
     body.push_str(&row("SSID", &escape(&opt(ssid))));
     body.push_str(&row(
@@ -295,13 +319,13 @@ const FORM_SCRIPT: &str = "\
 <script>\n\
 async function twSave(url, payload, btn){\n\
   const out = document.getElementById('result');\n\
-  btn.disabled = true; out.style.color=''; out.textContent = 'Сохранение…';\n\
+  btn.disabled = true; out.style.color=''; out.textContent = t('Сохранение…','Saving…');\n\
   try {\n\
     const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});\n\
     let j = {}; try { j = await r.json(); } catch(e) {}\n\
-    if (r.ok) { out.style.color='green'; out.textContent='Сохранено ✓'; setTimeout(function(){location.reload();}, 900); }\n\
-    else { out.style.color='red'; out.textContent='Ошибка ' + r.status + ': ' + (j.error || r.statusText); }\n\
-  } catch(e) { out.style.color='red'; out.textContent='Сбой запроса: ' + e; }\n\
+    if (r.ok) { out.style.color='green'; out.textContent=t('Сохранено ✓','Saved ✓'); setTimeout(function(){location.reload();}, 900); }\n\
+    else { out.style.color='red'; out.textContent=t('Ошибка','Error') + ' ' + r.status + ': ' + (j.error || r.statusText); }\n\
+  } catch(e) { out.style.color='red'; out.textContent=t('Сбой запроса: ','Request failed: ') + e; }\n\
   btn.disabled = false;\n\
 }\n\
 function val(id){ return document.getElementById(id).value; }\n\
@@ -335,22 +359,28 @@ pub async fn wifi(State(st): State<AppState>) -> Html<String> {
             let iface = w.interface.unwrap_or_else(|| "wlan0".to_string());
             format!(
                 "<section class=\"card\"><div class=\"card__body\">\n\
-                 <div class=\"callout\"><div class=\"body\">Интерфейс: <b>{iface}</b></div></div>\n\
+                 <div class=\"callout\"><div class=\"body\">\
+                 <span class=\"t-ru\">Интерфейс</span><span class=\"t-en\">Interface</span>: <b>{iface}</b>\
+                 </div></div>\n\
                  <form onsubmit=\"return false\">\n\
                  <div class=\"form-grid\">\n\
-                 <div class=\"field field--full\"><label for=\"ssid\">SSID <span class=\"en\">network name</span></label>\
+                 <div class=\"field field--full\"><label for=\"ssid\">SSID</label>\
                  <input id=\"ssid\" value=\"{ssid}\" maxlength=\"32\"></div>\n\
-                 <div class=\"field field--full\"><label for=\"passphrase\">Пароль <span class=\"en\">passphrase</span></label>\
+                 <div class=\"field field--full\">\
+                 <label for=\"passphrase\"><span class=\"t-ru\">Пароль</span><span class=\"t-en\">Password</span></label>\
                  <input id=\"passphrase\" value=\"{pass}\" minlength=\"8\" maxlength=\"63\">\
-                 <div class=\"hint\">8–63 символа</div></div>\n\
-                 <div class=\"field\"><label for=\"country\">Страна <span class=\"en\">country</span></label>\
+                 <div class=\"hint\"><span class=\"t-ru\">8–63 символа</span><span class=\"t-en\">8–63 characters</span></div></div>\n\
+                 <div class=\"field\">\
+                 <label for=\"country\"><span class=\"t-ru\">Страна</span><span class=\"t-en\">Country</span></label>\
                  <input id=\"country\" value=\"{country}\" maxlength=\"2\">\
-                 <div class=\"hint\">2 буквы, ISO-3166</div></div>\n\
-                 <div class=\"field\"><label for=\"channel\">Канал <span class=\"en\">channel</span></label>\
+                 <div class=\"hint\">ISO-3166</div></div>\n\
+                 <div class=\"field\">\
+                 <label for=\"channel\"><span class=\"t-ru\">Канал</span><span class=\"t-en\">Channel</span></label>\
                  <input id=\"channel\" type=\"number\" value=\"{channel}\" min=\"1\" max=\"165\"></div>\n\
                  </div>\n\
                  <div class=\"form-actions\">\
-                 <button class=\"btn btn--primary\" onclick=\"twWifi(this)\">Сохранить</button>\
+                 <button class=\"btn btn--primary\" onclick=\"twWifi(this)\">\
+                 <span class=\"t-ru\">Сохранить</span><span class=\"t-en\">Save</span></button>\
                  <span id=\"result\" class=\"note\" role=\"status\"></span></div>\n\
                  </form>\n</div></section>\n{FORM_SCRIPT}",
                 iface = escape(&iface),
@@ -373,22 +403,32 @@ pub async fn dhcp(State(st): State<AppState>) -> Html<String> {
     let body = match DhcpConfig::from_path(&st.config.paths.nanodhcp_conf) {
         Ok(c) => format!(
             "<section class=\"card\"><div class=\"card__body\">\n\
-             <div class=\"callout\"><div class=\"body\">Интерфейс: <b>{iface}</b></div></div>\n\
+             <div class=\"callout\"><div class=\"body\">\
+             <span class=\"t-ru\">Интерфейс</span><span class=\"t-en\">Interface</span>: <b>{iface}</b>\
+             </div></div>\n\
              <form onsubmit=\"return false\">\n\
              <div class=\"form-grid\">\n\
-             <div class=\"field field--full\"><label for=\"gateway\">Шлюз <span class=\"en\">gateway</span></label>\
+             <div class=\"field field--full\">\
+             <label for=\"gateway\"><span class=\"t-ru\">Шлюз</span><span class=\"t-en\">Gateway</span></label>\
              <input id=\"gateway\" value=\"{gw}\"></div>\n\
-             <div class=\"field\"><label for=\"range_start\">Начало пула <span class=\"en\">pool start</span></label>\
+             <div class=\"field\">\
+             <label for=\"range_start\"><span class=\"t-ru\">Начало пула</span><span class=\"t-en\">Pool start</span></label>\
              <input id=\"range_start\" value=\"{rs}\"></div>\n\
-             <div class=\"field\"><label for=\"range_end\">Конец пула <span class=\"en\">pool end</span></label>\
+             <div class=\"field\">\
+             <label for=\"range_end\"><span class=\"t-ru\">Конец пула</span><span class=\"t-en\">Pool end</span></label>\
              <input id=\"range_end\" value=\"{re}\"></div>\n\
-             <div class=\"field field--full\"><label for=\"dns\">DNS <span class=\"en\">resolvers</span></label>\
-             <input id=\"dns\" value=\"{dns}\"><div class=\"hint\">через запятую</div></div>\n\
-             <div class=\"field\"><label for=\"lease_time\">Аренда <span class=\"en\">lease</span></label>\
-             <input id=\"lease_time\" type=\"number\" value=\"{lt}\" min=\"1\"><div class=\"hint\">секунд</div></div>\n\
+             <div class=\"field field--full\">\
+             <label for=\"dns\">DNS</label>\
+             <input id=\"dns\" value=\"{dns}\">\
+             <div class=\"hint\"><span class=\"t-ru\">через запятую</span><span class=\"t-en\">comma-separated</span></div></div>\n\
+             <div class=\"field\">\
+             <label for=\"lease_time\"><span class=\"t-ru\">Аренда</span><span class=\"t-en\">Lease</span></label>\
+             <input id=\"lease_time\" type=\"number\" value=\"{lt}\" min=\"1\">\
+             <div class=\"hint\"><span class=\"t-ru\">секунд</span><span class=\"t-en\">seconds</span></div></div>\n\
              </div>\n\
              <div class=\"form-actions\">\
-             <button class=\"btn btn--primary\" onclick=\"twDhcp(this)\">Сохранить</button>\
+             <button class=\"btn btn--primary\" onclick=\"twDhcp(this)\">\
+             <span class=\"t-ru\">Сохранить</span><span class=\"t-en\">Save</span></button>\
              <span id=\"result\" class=\"note\" role=\"status\"></span></div>\n\
              </form>\n</div></section>\n{FORM_SCRIPT}",
             iface = escape(&c.interface),
@@ -423,7 +463,11 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
 
     // ── ACL control panel ─────────────────────────────────────────────────────
     let mode_cls = match acl.mode { AclMode::Disabled => "ok", AclMode::Whitelist => "warn", AclMode::Blacklist => "failed" };
-    let mode_label = match acl.mode { AclMode::Disabled => "Открытый", AclMode::Whitelist => "Белый список", AclMode::Blacklist => "Чёрный список" };
+    let mode_label = match acl.mode {
+        AclMode::Disabled  => "<span class=\"t-ru\">Открытый</span><span class=\"t-en\">Open</span>",
+        AclMode::Whitelist => "<span class=\"t-ru\">Белый список</span><span class=\"t-en\">Whitelist</span>",
+        AclMode::Blacklist => "<span class=\"t-ru\">Чёрный список</span><span class=\"t-en\">Blacklist</span>",
+    };
     let mac_list_html = if acl.macs.is_empty() {
         String::new()
     } else {
@@ -437,20 +481,28 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
     };
     body.push_str(&format!(
         "<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\
-         <h2 style=\"margin:0 0 .75rem\">Управление доступом \
+         <h2 style=\"margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Управление доступом</span>\
+         <span class=\"t-en\">Access control</span> \
          <span class=\"pill pill--{cls}\">{lbl}</span></h2>\
          <div style=\"display:flex;gap:.6rem;flex-wrap:wrap\">\
-         <button class=\"btn btn--ghost btn--sm\" onclick=\"aclSetMode('disabled')\">Открытый</button>\
-         <button class=\"btn btn--ghost btn--sm\" onclick=\"aclSetMode('whitelist')\">Белый список</button>\
-         <button class=\"btn btn--ghost btn--sm\" onclick=\"aclSetMode('blacklist')\">Чёрный список</button>\
+         <button class=\"btn btn--ghost btn--sm\" onclick=\"aclSetMode('disabled')\">\
+         <span class=\"t-ru\">Открытый</span><span class=\"t-en\">Open</span></button>\
+         <button class=\"btn btn--ghost btn--sm\" onclick=\"aclSetMode('whitelist')\">\
+         <span class=\"t-ru\">Белый список</span><span class=\"t-en\">Whitelist</span></button>\
+         <button class=\"btn btn--ghost btn--sm\" onclick=\"aclSetMode('blacklist')\">\
+         <span class=\"t-ru\">Чёрный список</span><span class=\"t-en\">Blacklist</span></button>\
          </div>{mac_list}</div></section>\n",
         cls = mode_cls, lbl = mode_label, mac_list = mac_list_html,
     ));
 
     // ── Dynamic leases ────────────────────────────────────────────────────────
     body.push_str("<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n");
-    body.push_str("<h2 style=\"margin:0 0 .75rem\">Активные клиенты</h2>\n");
-    body.push_str(&format!("<p>Состояние: {}</p>\n", pill(&format!("{:?}", report.state))));
+    body.push_str("<h2 style=\"margin:0 0 .75rem\">\
+        <span class=\"t-ru\">Активные клиенты</span>\
+        <span class=\"t-en\">Active clients</span></h2>\n");
+    body.push_str(&format!("<p><span class=\"t-ru\">Состояние</span>\
+        <span class=\"t-en\">Status</span>: {}</p>\n", pill(&format!("{:?}", report.state))));
     if let Some(err) = &report.error {
         body.push_str(&format!(
             "<div class=\"callout\" style=\"border-color:var(--status-failed)\"><div class=\"body\">{}</div></div>\n",
@@ -458,21 +510,31 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
         ));
     }
     if report.leases.is_empty() {
-        body.push_str("<div class=\"empty\">Активных клиентов нет.</div>\n");
+        body.push_str("<div class=\"empty\">\
+            <span class=\"t-ru\">Активных клиентов нет.</span>\
+            <span class=\"t-en\">No active clients.</span></div>\n");
     } else {
         body.push_str(
-            "<table class=\"tbl\">\n<thead><tr><th>Хост</th><th>MAC</th><th>IP</th>             <th>Сигнал</th><th>Статус</th><th>Истекает</th><th></th></tr></thead>\n<tbody>\n",
+            "<table class=\"tbl\">\n<thead><tr>\
+             <th><span class=\"t-ru\">Хост</span><span class=\"t-en\">Host</span></th>\
+             <th>MAC</th><th>IP</th>\
+             <th><span class=\"t-ru\">Сигнал</span><span class=\"t-en\">Signal</span></th>\
+             <th><span class=\"t-ru\">Статус</span><span class=\"t-en\">Status</span></th>\
+             <th><span class=\"t-ru\">Истекает</span><span class=\"t-en\">Expires</span></th>\
+             <th></th></tr></thead>\n<tbody>\n",
         );
         for l in &report.leases {
             let active = l.status == LeaseStatus::Active;
             let is_blocked = blocked.contains(&AclState::normalize_mac(&l.mac));
             let btn = if is_blocked {
                 format!(
-                    "<button onclick=\"aclUnblock(\'{mac}\')\"                     style=\"background:var(--status-ok);color:#fff\">Разблокировать</button>",
+                    "<button onclick=\"aclUnblock(\'{mac}\')\" style=\"background:var(--status-ok);color:#fff\">\
+                    <span class=\"t-ru\">Разблокировать</span><span class=\"t-en\">Unblock</span></button>",
                     mac = escape(&l.mac))
             } else {
                 format!(
-                    "<button onclick=\"aclBlock(\'{mac}\')\"                     style=\"background:var(--status-failed);color:#fff\">Блок</button>",
+                    "<button onclick=\"aclBlock(\'{mac}\')\" style=\"background:var(--status-failed);color:#fff\">\
+                    <span class=\"t-ru\">Блок</span><span class=\"t-en\">Block</span></button>",
                     mac = escape(&l.mac))
             };
             body.push_str(&format!(
@@ -492,14 +554,20 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
 
     // ── Static leases ─────────────────────────────────────────────────────────
     body.push_str("<section class=\"card\"><div class=\"card__body\">\n");
-    body.push_str("<h2 style=\"margin:0 0 .75rem\">Статические аренды</h2>\n");
+    body.push_str("<h2 style=\"margin:0 0 .75rem\">\
+        <span class=\"t-ru\">Статические аренды</span>\
+        <span class=\"t-en\">Static leases</span></h2>\n");
 
     if static_leases.is_empty() {
-        body.push_str("<div class=\"empty\" style=\"margin-bottom:.75rem\">Статических аренд нет.</div>\n");
+        body.push_str("<div class=\"empty\" style=\"margin-bottom:.75rem\">\
+            <span class=\"t-ru\">Статических аренд нет.</span>\
+            <span class=\"t-en\">No static leases.</span></div>\n");
     } else {
         body.push_str(
             "<table class=\"tbl\" style=\"margin-bottom:.75rem\">\n\
-             <thead><tr><th>Имя</th><th>MAC</th><th>IP</th><th></th></tr></thead>\n<tbody>\n",
+             <thead><tr>\
+             <th><span class=\"t-ru\">Имя</span><span class=\"t-en\">Name</span></th>\
+             <th>MAC</th><th>IP</th><th></th></tr></thead>\n<tbody>\n",
         );
         for sl in &static_leases {
             body.push_str(&format!(
@@ -522,20 +590,21 @@ pub async fn leases(State(st): State<AppState>) -> Html<String> {
     body.push_str(
         "<div class=\"form-grid\">\n\
          <div class=\"field\">\
-         <label for=\"sl-name\">Имя хоста</label>\
+         <label for=\"sl-name\"><span class=\"t-ru\">Имя хоста</span><span class=\"t-en\">Hostname</span></label>\
          <input id=\"sl-name\" placeholder=\"laptop\" maxlength=\"64\">\
          </div>\
          <div class=\"field\">\
-         <label for=\"sl-mac\">MAC-адрес</label>\
+         <label for=\"sl-mac\">MAC</label>\
          <input id=\"sl-mac\" placeholder=\"aa:bb:cc:dd:ee:ff\">\
          </div>\
          <div class=\"field\">\
-         <label for=\"sl-ip\">IP-адрес</label>\
+         <label for=\"sl-ip\">IP</label>\
          <input id=\"sl-ip\" placeholder=\"192.168.44.50\">\
          </div>\
          </div>\n\
          <div class=\"form-actions\">\
-         <button class=\"btn btn--primary\" onclick=\"slAdd(this)\">Добавить</button>\
+         <button class=\"btn btn--primary\" onclick=\"slAdd(this)\">\
+         <span class=\"t-ru\">Добавить</span><span class=\"t-en\">Add</span></button>\
          <span id=\"sl-result\" class=\"note\" role=\"status\"></span>\
          </div>\n"
     );
@@ -553,28 +622,28 @@ async function slAdd(btn){\n\
   var mac=document.getElementById('sl-mac').value.trim();\n\
   var ip=document.getElementById('sl-ip').value.trim();\n\
   var out=document.getElementById('sl-result');\n\
-  if(!name||!mac||!ip){out.style.color='red';out.textContent='Заполните все поля';return;}\n\
-  btn.disabled=true;out.style.color='';out.textContent='Добавление…';\n\
+  if(!name||!mac||!ip){out.style.color='red';out.textContent=t('Заполните все поля','Fill in all fields');return;}\n\
+  btn.disabled=true;out.style.color='';out.textContent=t('Добавление…','Adding…');\n\
   try{\n\
     var r=await fetch('/api/dhcp/static',{method:'POST',\n\
       headers:{'Content-Type':'application/json'},\n\
       body:JSON.stringify({name:name,mac:mac,ip:ip})});\n\
     var j={};try{j=await r.json();}catch(e){}\n\
-    if(r.ok){out.style.color='green';out.textContent='Добавлено ✓';setTimeout(function(){location.reload();},700);}\n\
-    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+    if(r.ok){out.style.color='green';out.textContent=t('Добавлено ✓','Added ✓');setTimeout(function(){location.reload();},700);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   btn.disabled=false;\n\
 }\n\
 async function slDelete(btn,mac){\n\
   var out=document.getElementById('sl-result');\n\
   var macDecoded=decodeURIComponent(mac);\n\
-  btn.disabled=true;out.style.color='';out.textContent='Удаление…';\n\
+  btn.disabled=true;out.style.color='';out.textContent=t('Удаление…','Deleting…');\n\
   try{\n\
     var r=await fetch('/api/dhcp/static/'+encodeURIComponent(macDecoded),{method:'DELETE'});\n\
     var j={};try{j=await r.json();}catch(e){}\n\
-    if(r.ok){btn.closest('tr').remove();out.style.color='green';out.textContent='Удалено ✓';setTimeout(function(){out.textContent='';},2000);}\n\
-    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);btn.disabled=false;}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;btn.disabled=false;}\n\
+    if(r.ok){btn.closest('tr').remove();out.style.color='green';out.textContent=t('Удалено ✓','Deleted ✓');setTimeout(function(){out.textContent='';},2000);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);btn.disabled=false;}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;btn.disabled=false;}\n\
 }\n\
 </script>\n";
 
@@ -582,16 +651,16 @@ const ACL_SCRIPT: &str = "\
 <script>\n\
 async function aclBlock(mac){\n\
   var r=await fetch('/api/acl/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac:mac})});\n\
-  if(r.ok)location.reload();else alert('Ошибка: '+(await r.text()));\n\
+  if(r.ok)location.reload();else alert(t('Ошибка: ','Error: ')+(await r.text()));\n\
 }\n\
 async function aclUnblock(mac){\n\
   var r=await fetch('/api/acl/unblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac:mac})});\n\
-  if(r.ok)location.reload();else alert('Ошибка: '+(await r.text()));\n\
+  if(r.ok)location.reload();else alert(t('Ошибка: ','Error: ')+(await r.text()));\n\
 }\n\
 async function aclSetMode(mode){\n\
   var cur=await(await fetch('/api/acl')).json();\n\
   var r=await fetch('/api/acl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode,macs:cur.macs||[]})});\n\
-  if(r.ok)location.reload();else alert('Ошибка: '+(await r.text()));\n\
+  if(r.ok)location.reload();else alert(t('Ошибка: ','Error: ')+(await r.text()));\n\
 }\n\
 </script>\n";
 
@@ -606,24 +675,28 @@ pub async fn dns(State(st): State<AppState>) -> Html<String> {
     let upstreams_val = settings.upstreams.join(", ");
     body.push_str(&format!(
         "<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n\
-         <h2 style=\"margin:0 0 .75rem\">Зона и серверы</h2>\n\
+         <h2 style=\"margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Зона и серверы</span><span class=\"t-en\">Zone &amp; servers</span></h2>\n\
          <form onsubmit=\"return false\">\n\
          <div class=\"form-grid\">\n\
          <div class=\"field\">\
-         <label for=\"dns-domain\">Локальная зона <span class=\"en\">domain</span></label>\
+         <label for=\"dns-domain\">\
+         <span class=\"t-ru\">Локальная зона</span><span class=\"t-en\">Local zone</span></label>\
          <input id=\"dns-domain\" value=\"{domain}\" placeholder=\"lan\">\
          </div>\n\
          <div class=\"field\">\
-         <label for=\"dns-router-name\">Имя роутера <span class=\"en\">router_name</span></label>\
+         <label for=\"dns-router-name\">\
+         <span class=\"t-ru\">Имя роутера</span><span class=\"t-en\">Router name</span></label>\
          <input id=\"dns-router-name\" value=\"{router_name}\" placeholder=\"router\">\
          </div>\n\
          <div class=\"field field--full\">\
-         <label for=\"dns-upstreams\">Upstream DNS <span class=\"en\">через запятую</span></label>\
+         <label for=\"dns-upstreams\">Upstream DNS</label>\
          <input id=\"dns-upstreams\" value=\"{upstreams}\" placeholder=\"1.1.1.1:53, 8.8.8.8:53\">\
          </div>\n\
          </div>\n\
          <div class=\"form-actions\">\
-         <button class=\"btn btn--primary\" onclick=\"dnsSaveSettings(this)\">Применить</button>\
+         <button class=\"btn btn--primary\" onclick=\"dnsSaveSettings(this)\">\
+         <span class=\"t-ru\">Применить</span><span class=\"t-en\">Apply</span></button>\
          <span id=\"dns-settings-result\" class=\"note\" role=\"status\"></span>\
          </div>\n\
          </form>\n\
@@ -636,15 +709,24 @@ pub async fn dns(State(st): State<AppState>) -> Html<String> {
     // ── Section 2: Static records ──────────────────────────────────────────
     body.push_str(
         "<section class=\"card\"><div class=\"card__body\">\n\
-         <h2 style=\"margin:0 0 .75rem\">Статические записи</h2>\n"
+         <h2 style=\"margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Статические записи</span><span class=\"t-en\">Static records</span></h2>\n"
     );
 
     if records.is_empty() {
-        body.push_str("<div class=\"empty\" style=\"margin:.5rem 0 1rem\">Нет статических записей.</div>\n");
+        body.push_str(
+            "<div class=\"empty\" style=\"margin:.5rem 0 1rem\">\
+             <span class=\"t-ru\">Нет статических записей.</span>\
+             <span class=\"t-en\">No static records.</span></div>\n"
+        );
     } else {
         body.push_str(
             "<table class=\"tbl\" style=\"margin-bottom:1rem\">\n\
-             <thead><tr><th>Имя</th><th>Тип</th><th>Адрес</th><th>TTL</th><th></th></tr></thead>\n\
+             <thead><tr>\
+             <th><span class=\"t-ru\">Имя</span><span class=\"t-en\">Name</span></th>\
+             <th><span class=\"t-ru\">Тип</span><span class=\"t-en\">Type</span></th>\
+             <th><span class=\"t-ru\">Адрес</span><span class=\"t-en\">Address</span></th>\
+             <th>TTL</th><th></th></tr></thead>\n\
              <tbody>\n"
         );
         for rec in &records {
@@ -675,15 +757,18 @@ pub async fn dns(State(st): State<AppState>) -> Html<String> {
     body.push_str(
         "<div class=\"form-grid\" style=\"margin-top:.5rem\">\n\
          <div class=\"field\">\
-         <label for=\"dns-rec-name\">Имя <span class=\"en\">name</span></label>\
+         <label for=\"dns-rec-name\">\
+         <span class=\"t-ru\">Имя</span><span class=\"t-en\">Name</span></label>\
          <input id=\"dns-rec-name\" placeholder=\"myserver.lan\">\
          </div>\n\
          <div class=\"field\">\
-         <label for=\"dns-rec-type\">Тип</label>\
+         <label for=\"dns-rec-type\">\
+         <span class=\"t-ru\">Тип</span><span class=\"t-en\">Type</span></label>\
          <select id=\"dns-rec-type\"><option>A</option></select>\
          </div>\n\
          <div class=\"field\">\
-         <label for=\"dns-rec-value\">Адрес <span class=\"en\">value</span></label>\
+         <label for=\"dns-rec-value\">\
+         <span class=\"t-ru\">Адрес</span><span class=\"t-en\">Address</span></label>\
          <input id=\"dns-rec-value\" placeholder=\"192.168.44.50\">\
          </div>\n\
          <div class=\"field\">\
@@ -692,7 +777,8 @@ pub async fn dns(State(st): State<AppState>) -> Html<String> {
          </div>\n\
          </div>\n\
          <div class=\"form-actions\">\
-         <button class=\"btn btn--primary btn--sm\" onclick=\"dnsAddRecord(this)\">Добавить</button>\
+         <button class=\"btn btn--primary btn--sm\" onclick=\"dnsAddRecord(this)\">\
+         <span class=\"t-ru\">Добавить</span><span class=\"t-en\">Add</span></button>\
          <span id=\"dns-rec-result\" class=\"note\" role=\"status\"></span>\
          </div>\n\
          </div></section>\n"
@@ -706,7 +792,7 @@ const DNS_SCRIPT: &str = "\
 <script>\n\
 async function dnsSaveSettings(btn){\n\
   var out=document.getElementById('dns-settings-result');\n\
-  btn.disabled=true;out.style.color='';out.textContent='Применяю…';\n\
+  btn.disabled=true;out.style.color='';out.textContent=t('Применяю…','Applying…');\n\
   var domain=document.getElementById('dns-domain').value.trim();\n\
   var routerName=document.getElementById('dns-router-name').value.trim();\n\
   var ups=document.getElementById('dns-upstreams').value.split(',').map(function(s){return s.trim();}).filter(Boolean);\n\
@@ -714,9 +800,9 @@ async function dnsSaveSettings(btn){\n\
     var r=await fetch('/api/dns',{method:'POST',headers:{'Content-Type':'application/json'},\n\
       body:JSON.stringify({domain:domain,router_name:routerName,upstreams:ups})});\n\
     var j={};try{j=await r.json();}catch(e){}\n\
-    if(r.ok){out.style.color='green';out.textContent='Применено ✓';setTimeout(function(){location.reload();},1000);}\n\
-    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+    if(r.ok){out.style.color='green';out.textContent=t('Применено ✓','Applied ✓');setTimeout(function(){location.reload();},1000);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   btn.disabled=false;\n\
 }\n\
 async function dnsAddRecord(btn){\n\
@@ -725,27 +811,27 @@ async function dnsAddRecord(btn){\n\
   var rtype=document.getElementById('dns-rec-type').value;\n\
   var value=document.getElementById('dns-rec-value').value.trim();\n\
   var ttl=parseInt(document.getElementById('dns-rec-ttl').value,10)||60;\n\
-  if(!name||!value){out.style.color='red';out.textContent='Заполните имя и адрес';return;}\n\
-  btn.disabled=true;out.style.color='';out.textContent='Добавление…';\n\
+  if(!name||!value){out.style.color='red';out.textContent=t('Заполните имя и адрес','Fill in name and address');return;}\n\
+  btn.disabled=true;out.style.color='';out.textContent=t('Добавление…','Adding…');\n\
   try{\n\
     var r=await fetch('/api/dns/records',{method:'POST',headers:{'Content-Type':'application/json'},\n\
       body:JSON.stringify({name:name,rtype:rtype,value:value,ttl:ttl})});\n\
     var j={};try{j=await r.json();}catch(e){}\n\
-    if(r.ok){out.style.color='green';out.textContent='Добавлено ✓';setTimeout(function(){location.reload();},700);}\n\
-    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+    if(r.ok){out.style.color='green';out.textContent=t('Добавлено ✓','Added ✓');setTimeout(function(){location.reload();},700);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   btn.disabled=false;\n\
 }\n\
 async function dnsDeleteRecord(btn,name,rtype){\n\
   var out=document.getElementById('dns-rec-result');\n\
-  btn.disabled=true;out.style.color='';out.textContent='Удаление…';\n\
+  btn.disabled=true;out.style.color='';out.textContent=t('Удаление…','Deleting…');\n\
   try{\n\
     var r=await fetch('/api/dns/records',{method:'DELETE',headers:{'Content-Type':'application/json'},\n\
       body:JSON.stringify({name:name,rtype:rtype})});\n\
     var j={};try{j=await r.json();}catch(e){}\n\
-    if(r.ok){btn.closest('tr').remove();out.style.color='green';out.textContent='Удалено ✓';setTimeout(function(){out.textContent='';},2000);}\n\
-    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);btn.disabled=false;}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;btn.disabled=false;}\n\
+    if(r.ok){btn.closest('tr').remove();out.style.color='green';out.textContent=t('Удалено ✓','Deleted ✓');setTimeout(function(){out.textContent='';},2000);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);btn.disabled=false;}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;btn.disabled=false;}\n\
 }\n\
 </script>\n";
 
@@ -778,14 +864,15 @@ pub async fn wan(_st: State<AppState>) -> Html<String> {
 
     // Status card
     body.push_str("<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n");
-    body.push_str("<h2 style=\"margin:0 0 .75rem\">Состояние</h2>\n");
+    body.push_str("<h2 style=\"margin:0 0 .75rem\">\
+        <span class=\"t-ru\">Состояние</span><span class=\"t-en\">Status</span></h2>\n");
     body.push_str("<table class=\"tbl\"><tbody>\n");
-    body.push_str(&row("Интерфейс", &escape(&active_iface)));
-    body.push_str(&row("Канал", &state_pill));
-    body.push_str(&row("Адрес", &escape(status.address.as_deref().unwrap_or("—"))));
-    body.push_str(&row("Шлюз",  &escape(status.gateway.as_deref().unwrap_or("—"))));
+    body.push_str(&row_html("<span class=\"t-ru\">Интерфейс</span><span class=\"t-en\">Interface</span>", &escape(&active_iface)));
+    body.push_str(&row_html("<span class=\"t-ru\">Канал</span><span class=\"t-en\">Link</span>", &state_pill));
+    body.push_str(&row_html("<span class=\"t-ru\">Адрес</span><span class=\"t-en\">Address</span>", &escape(status.address.as_deref().unwrap_or("—"))));
+    body.push_str(&row_html("<span class=\"t-ru\">Шлюз</span><span class=\"t-en\">Gateway</span>",  &escape(status.gateway.as_deref().unwrap_or("—"))));
     body.push_str(&row("DNS", &escape(&if status.dns.is_empty() { "—".into() } else { status.dns.join(", ") })));
-    body.push_str(&format!("<tr><th>Интернет</th><td>{online_pill}</td></tr>\n"));
+    body.push_str(&format!("<tr><th><span class=\"t-ru\">Интернет</span><span class=\"t-en\">Internet</span></th><td>{online_pill}</td></tr>\n"));
     body.push_str("</tbody></table>\n");
     body.push_str("</div></section>\n");
 
@@ -813,30 +900,37 @@ pub async fn wan(_st: State<AppState>) -> Html<String> {
 
     body.push_str(&format!(
         "<section class=\"card\"><div class=\"card__body\">\n\
-         <h2 style=\"margin:0 0 .75rem\">Настройка</h2>\n\
+         <h2 style=\"margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Настройка</span><span class=\"t-en\">Configuration</span></h2>\n\
          <form onsubmit=\"return false\">\n\
          <div class=\"form-grid\">\n\
-         <div class=\"field\"><label for=\"wan-iface\">Интерфейс <span class=\"en\">interface</span></label>\
+         <div class=\"field\"><label for=\"wan-iface\">\
+         <span class=\"t-ru\">Интерфейс</span><span class=\"t-en\">Interface</span></label>\
          <select id=\"wan-iface\" onchange=\"wanModeToggle()\">{iface_options}</select></div>\n\
-         <div class=\"field\"><label for=\"wan-mode\">Режим <span class=\"en\">mode</span></label>\
+         <div class=\"field\"><label for=\"wan-mode\">\
+         <span class=\"t-ru\">Режим</span><span class=\"t-en\">Mode</span></label>\
          <select id=\"wan-mode\" onchange=\"wanModeToggle()\">\
-         <option value=\"dhcp\"{dhcp_sel}>DHCP (авто)</option>\
-         <option value=\"static\"{static_sel}>Static (ручной)</option>\
+         <option value=\"dhcp\"{dhcp_sel} data-ru=\"DHCP (авто)\" data-en=\"DHCP (auto)\">DHCP (авто)</option>\
+         <option value=\"static\"{static_sel} data-ru=\"Static (ручной)\" data-en=\"Static (manual)\">Static (ручной)</option>\
          </select></div>\n\
          </div>\n\
          <div id=\"wan-static\" style=\"display:none\">\n\
          <div class=\"form-grid\">\n\
-         <div class=\"field\"><label for=\"wan-addr\">Адрес <span class=\"en\">address/prefix</span></label>\
+         <div class=\"field\"><label for=\"wan-addr\">\
+         <span class=\"t-ru\">Адрес</span><span class=\"t-en\">Address / prefix</span></label>\
          <input id=\"wan-addr\" value=\"{static_addr}\" placeholder=\"192.168.1.2/24\"></div>\n\
-         <div class=\"field\"><label for=\"wan-gw\">Шлюз <span class=\"en\">gateway</span></label>\
+         <div class=\"field\"><label for=\"wan-gw\">\
+         <span class=\"t-ru\">Шлюз</span><span class=\"t-en\">Gateway</span></label>\
          <input id=\"wan-gw\" value=\"{static_gw}\" placeholder=\"192.168.1.1\"></div>\n\
          <div class=\"field field--full\"><label for=\"wan-dns\">DNS</label>\
          <input id=\"wan-dns\" value=\"{static_dns}\" placeholder=\"8.8.8.8, 1.1.1.1\">\
-         <div class=\"hint\">через запятую</div></div>\n\
+         <div class=\"hint\">\
+         <span class=\"t-ru\">через запятую</span><span class=\"t-en\">comma-separated</span></div></div>\n\
          </div>\n\
          </div>\n\
          <div class=\"form-actions\">\
-         <button class=\"btn btn--primary\" onclick=\"wanSave(this)\">Применить</button>\
+         <button class=\"btn btn--primary\" onclick=\"wanSave(this)\">\
+         <span class=\"t-ru\">Применить</span><span class=\"t-en\">Apply</span></button>\
          <span id=\"wan-result\" class=\"note\" role=\"status\"></span>\
          </div>\n\
          </form>\n</div></section>\n",
@@ -857,7 +951,7 @@ function wanModeToggle(){\n\
 wanModeToggle();\n\
 async function wanSave(btn){\n\
   var out=document.getElementById('wan-result');\n\
-  btn.disabled=true; out.style.color=''; out.textContent='Применяю…';\n\
+  btn.disabled=true; out.style.color=''; out.textContent=t('Применяю…','Applying…');\n\
   var payload={\n\
     interface:document.getElementById('wan-iface').value,\n\
     mode:document.getElementById('wan-mode').value,\n\
@@ -868,9 +962,9 @@ async function wanSave(btn){\n\
   try{\n\
     var r=await fetch('/api/wan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});\n\
     var j={}; try{j=await r.json();}catch(e){}\n\
-    if(r.ok){out.style.color='green';out.textContent='Применено ✓';setTimeout(function(){location.reload();},1200);}\n\
-    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+    if(r.ok){out.style.color='green';out.textContent=t('Применено ✓','Applied ✓');setTimeout(function(){location.reload();},1200);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   btn.disabled=false;\n\
 }\n\
 </script>\n";
@@ -884,10 +978,15 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
 
     // ── Section 1: Tunnel list ─────────────────────────────────────────────
     body.push_str("<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n");
-    body.push_str("<h2 style=\"margin:0 0 1rem\">Мои туннели</h2>\n");
+    body.push_str("<h2 style=\"margin:0 0 1rem\">\
+        <span class=\"t-ru\">Мои туннели</span><span class=\"t-en\">My tunnels</span></h2>\n");
 
     if tunnels.is_empty() {
-        body.push_str("<div class=\"empty\" style=\"margin:.5rem 0 1rem\">Нет туннелей. Добавьте ниже.</div>\n");
+        body.push_str(
+            "<div class=\"empty\" style=\"margin:.5rem 0 1rem\">\
+             <span class=\"t-ru\">Нет туннелей. Добавьте ниже.</span>\
+             <span class=\"t-en\">No tunnels. Add one below.</span></div>\n"
+        );
     } else {
         body.push_str("<div style=\"display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem\">\n");
         for t in &tunnels {
@@ -912,10 +1011,12 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
                 ep = escape(endpoint),
                 n = escape(&t.name),
                 btn = if is_up {
-                    format!("<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\">Отключить</button>",
+                    format!("<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\">\
+                        <span class=\"t-ru\">Отключить</span><span class=\"t-en\">Disconnect</span></button>",
                         n = escape(&t.name))
                 } else {
-                    format!("<button class=\"btn btn--primary btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/up',this)\">Подключить</button>",
+                    format!("<button class=\"btn btn--primary btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/up',this)\">\
+                        <span class=\"t-ru\">Подключить</span><span class=\"t-en\">Connect</span></button>",
                         n = escape(&t.name))
                 },
             ));
@@ -926,24 +1027,28 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
     // Toggle button to show/hide import form
     body.push_str(
         "<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnToggleImport()\" id=\"vpn-add-btn\">\
-         + Добавить туннель\
+         <span class=\"t-ru\">+ Добавить туннель</span><span class=\"t-en\">+ Add tunnel</span>\
          </button>\n\
          <div id=\"vpn-import-form\" style=\"display:none;margin-top:.75rem\">\n\
          <div class=\"field\" style=\"margin-bottom:.5rem\">\
-         <label for=\"vpn-name\">Имя туннеля</label>\
+         <label for=\"vpn-name\">\
+         <span class=\"t-ru\">Имя туннеля</span><span class=\"t-en\">Tunnel name</span></label>\
          <input id=\"vpn-name\" value=\"awg0\" maxlength=\"32\" placeholder=\"awg0\">\
          </div>\
          <div class=\"field\" style=\"margin-bottom:.5rem\">\
-         <label for=\"vpn-import-text\">Конфиг <span class=\"en\">(.conf или vpn://...)</span></label>\
+         <label for=\"vpn-import-text\">\
+         <span class=\"t-ru\">Конфиг (.conf или vpn://...)</span><span class=\"t-en\">Config (.conf or vpn://...)</span></label>\
          <textarea id=\"vpn-import-text\" rows=\"7\" \
          style=\"width:100%;box-sizing:border-box;font-family:monospace;font-size:.8rem;\
          resize:vertical;background:var(--surface-1);color:var(--text);\
          border:1px solid var(--border);border-radius:4px;padding:.5rem\" \
-         placeholder=\"[Interface]\nPrivateKey = ...\n\nили vpn://AAALR...\"></textarea>\
+         placeholder=\"[Interface]\nPrivateKey = ...\n\nor vpn://AAALR...\"></textarea>\
          </div>\
          <div class=\"form-actions\">\
-         <button class=\"btn btn--primary\" onclick=\"vpnImport(this)\">Импортировать</button>\
-         <button class=\"btn btn--ghost\" onclick=\"vpnToggleImport()\">Отмена</button>\
+         <button class=\"btn btn--primary\" onclick=\"vpnImport(this)\">\
+         <span class=\"t-ru\">Импортировать</span><span class=\"t-en\">Import</span></button>\
+         <button class=\"btn btn--ghost\" onclick=\"vpnToggleImport()\">\
+         <span class=\"t-ru\">Отмена</span><span class=\"t-en\">Cancel</span></button>\
          <span id=\"vpn-import-result\" class=\"note\" role=\"status\"></span>\
          </div>\
          </div>\n"
@@ -953,16 +1058,22 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
     // ── Section 2: Bypass list ─────────────────────────────────────────────
     body.push_str("<section class=\"card\"><div class=\"card__body\">\n");
     body.push_str(
-        "<h2 style=\"margin:0 0 .4rem\">Обход VPN</h2>\
+        "<h2 style=\"margin:0 0 .4rem\">\
+         <span class=\"t-ru\">Обход VPN</span><span class=\"t-en\">VPN bypass</span></h2>\
          <p style=\"margin:0 0 .75rem;font-size:.85rem;color:var(--text-muted)\">\
-         Адреса и сети, которые всегда идут напрямую (не через туннель).\
+         <span class=\"t-ru\">Адреса и сети, которые всегда идут напрямую (не через туннель).</span>\
+         <span class=\"t-en\">Addresses and subnets that always go direct (not through the tunnel).</span>\
          </p>\n"
     );
 
     // Bypass entries list
     body.push_str("<div id=\"bypass-list\">\n");
     if bypass.is_empty() {
-        body.push_str("<div class=\"empty\" style=\"margin:.5rem 0\">Нет исключений — весь трафик через VPN.</div>\n");
+        body.push_str(
+            "<div class=\"empty\" style=\"margin:.5rem 0\">\
+             <span class=\"t-ru\">Нет исключений — весь трафик через VPN.</span>\
+             <span class=\"t-en\">No exceptions — all traffic goes through VPN.</span></div>\n"
+        );
     }
     for entry in &bypass {
         body.push_str(&format!(
@@ -978,9 +1089,10 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
     // Add entry form
     body.push_str(
         "<div style=\"display:flex;gap:.5rem;margin-top:.5rem\" id=\"bypass-add-row\">\
-         <input id=\"bypass-input\" placeholder=\"1.2.3.4 или 192.168.0.0/16\" \
+         <input id=\"bypass-input\" placeholder=\"1.2.3.4 or 192.168.0.0/16\" \
          style=\"flex:1\" onkeydown=\"if(event.key==='Enter')bypassAdd()\">\
-         <button class=\"btn btn--primary btn--sm\" onclick=\"bypassAdd()\">Добавить</button>\
+         <button class=\"btn btn--primary btn--sm\" onclick=\"bypassAdd()\">\
+         <span class=\"t-ru\">Добавить</span><span class=\"t-en\">Add</span></button>\
          </div>\
          <span id=\"bypass-result\" class=\"note\" role=\"status\" style=\"display:block;margin-top:.4rem\"></span>\n"
     );
@@ -1003,14 +1115,14 @@ async function vpnImport(btn){\n\
   var out=document.getElementById('vpn-import-result');\n\
   var name=document.getElementById('vpn-name').value.trim();\n\
   var config=document.getElementById('vpn-import-text').value.trim();\n\
-  if(!name||!config){out.style.color='red';out.textContent='Заполните имя и конфиг';return;}\n\
-  btn.disabled=true;out.style.color='';out.textContent='Импорт…';\n\
+  if(!name||!config){out.style.color='red';out.textContent=t('Заполните имя и конфиг','Fill in name and config');return;}\n\
+  btn.disabled=true;out.style.color='';out.textContent=t('Импорт…','Importing…');\n\
   try{\n\
     var r=await fetch('/api/vpn',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,config})});\n\
     var j={};try{j=await r.json();}catch(e){}\n\
-    if(r.ok){out.style.color='green';out.textContent='Добавлен ✓';setTimeout(function(){location.reload();},700);}\n\
-    else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+    if(r.ok){out.style.color='green';out.textContent=t('Добавлен ✓','Added ✓');setTimeout(function(){location.reload();},700);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   btn.disabled=false;\n\
 }\n\
 \n\
@@ -1025,7 +1137,7 @@ async function vpnAct(url,btn){\n\
     if(r.ok){if(out)out.textContent='';setTimeout(function(){location.reload();},600);}\n\
     else{if(out){out.style.color='red';out.textContent=j.error||r.statusText;}}\n\
   }catch(e){\n\
-    if(out){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+    if(out){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   }\n\
   btn.disabled=false;\n\
 }\n\
@@ -1034,9 +1146,9 @@ async function bypassSave(entries){\n\
   var out=document.getElementById('bypass-result');\n\
   try{\n\
     var r=await fetch('/api/vpn/bypass',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries:entries})});\n\
-    if(r.ok){out.style.color='green';out.textContent='Сохранено ✓';setTimeout(function(){out.textContent='';},2000);}\n\
-    else{var j={};try{j=await r.json();}catch(e){}out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
-  }catch(e){out.style.color='red';out.textContent='Сбой: '+e;}\n\
+    if(r.ok){out.style.color='green';out.textContent=t('Сохранено ✓','Saved ✓');setTimeout(function(){out.textContent='';},2000);}\n\
+    else{var j={};try{j=await r.json();}catch(e){}out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
 }\n\
 \n\
 function bypassAdd(){\n\
@@ -1070,13 +1182,13 @@ const SYSTEM_SCRIPT: &str = "\
 async function act(url, btn, confirmMsg){\n\
   if(confirmMsg && !confirm(confirmMsg)) return;\n\
   const out = document.getElementById('result');\n\
-  btn.disabled = true; out.textContent = 'Working…';\n\
+  btn.disabled = true; out.textContent = t('Работаю…','Working…');\n\
   try {\n\
     const r = await fetch(url, {method:'POST'});\n\
     let j = {}; try { j = await r.json(); } catch(e) {}\n\
-    out.textContent = r.ok ? ('OK: ' + url) : ('Error ' + r.status + ': ' + (j.error||r.statusText));\n\
+    out.textContent = r.ok ? ('OK: ' + url) : (t('Ошибка','Error') + ' ' + r.status + ': ' + (j.error||r.statusText));\n\
     if(r.ok) setTimeout(function(){ location.reload(); }, 1000);\n\
-  } catch(e){ out.textContent = 'Request failed: ' + e; }\n\
+  } catch(e){ out.textContent = t('Ошибка запроса: ','Request failed: ') + e; }\n\
   btn.disabled = false;\n\
 }\n\
 async function twChangePassword(btn){\n\
@@ -1084,20 +1196,20 @@ async function twChangePassword(btn){\n\
   const nw = document.getElementById('new-pw').value;\n\
   const nw2 = document.getElementById('new-pw2').value;\n\
   const out = document.getElementById('pw-result');\n\
-  if(nw !== nw2){ out.style.color='red'; out.textContent='Пароли не совпадают'; return; }\n\
-  if(nw.length < 8){ out.style.color='red'; out.textContent='Минимум 8 символов'; return; }\n\
-  btn.disabled = true; out.style.color=''; out.textContent='Сохранение…';\n\
+  if(nw !== nw2){ out.style.color='red'; out.textContent=t('Пароли не совпадают','Passwords do not match'); return; }\n\
+  if(nw.length < 8){ out.style.color='red'; out.textContent=t('Минимум 8 символов','Minimum 8 characters'); return; }\n\
+  btn.disabled = true; out.style.color=''; out.textContent=t('Сохранение…','Saving…');\n\
   try {\n\
     const r = await fetch('/api/auth/password',{method:'POST',\n\
       headers:{'Content-Type':'application/json'},\n\
       body:JSON.stringify({current:cur,new:nw})});\n\
     let j={}; try{j=await r.json();}catch(e){}\n\
-    if(r.ok){ out.style.color='green'; out.textContent='Пароль изменён ✓'; \n\
+    if(r.ok){ out.style.color='green'; out.textContent=t('Пароль изменён ✓','Password changed ✓'); \n\
       document.getElementById('cur-pw').value='';\n\
       document.getElementById('new-pw').value='';\n\
       document.getElementById('new-pw2').value=''; }\n\
-    else{ out.style.color='red'; out.textContent='Ошибка: '+(j.error||r.statusText); }\n\
-  } catch(e){ out.style.color='red'; out.textContent='Сбой: '+e; }\n\
+    else{ out.style.color='red'; out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText); }\n\
+  } catch(e){ out.style.color='red'; out.textContent=t('Сбой: ','Failure: ')+e; }\n\
   btn.disabled = false;\n\
 }\n\
 </script>\n";
@@ -1115,8 +1227,8 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
     let mut body = String::new();
     body.push_str("<table class=\"tbl\" style=\"margin-bottom:1.5rem\"><tbody>\n");
     body.push_str(&row("TinyWifi", tinywifi_core::VERSION));
-    body.push_str(&row("Хост", &escape(&host)));
-    body.push_str(&row("Ядро", &escape(&kernel)));
+    body.push_str(&row_html("<span class=\"t-ru\">Хост</span><span class=\"t-en\">Host</span>", &escape(&host)));
+    body.push_str(&row_html("<span class=\"t-ru\">Ядро</span><span class=\"t-en\">Kernel</span>", &escape(&kernel)));
     body.push_str("</tbody></table>\n");
 
     // ── Services ──────────────────────────────────────────────────────────────
@@ -1129,8 +1241,12 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
     ];
 
     body.push_str(
-        "<h2>Сервисы</h2>\n\
-         <table class=\"tbl\">\n<thead><tr><th>Сервис</th><th>Статус</th><th></th></tr></thead>\n<tbody>\n",
+        "<h2><span class=\"t-ru\">Сервисы</span><span class=\"t-en\">Services</span></h2>\n\
+         <table class=\"tbl\">\n\
+         <thead><tr>\
+         <th><span class=\"t-ru\">Сервис</span><span class=\"t-en\">Service</span></th>\
+         <th><span class=\"t-ru\">Статус</span><span class=\"t-en\">Status</span></th>\
+         <th></th></tr></thead>\n<tbody>\n",
     );
     for (label, unit, config) in items {
         let status = service_status(unit);
@@ -1168,22 +1284,23 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
 
     // ── Security ──────────────────────────────────────────────────────────────
     body.push_str(
-        "<h2>Безопасность</h2>\n\
+        "<h2><span class=\"t-ru\">Безопасность</span><span class=\"t-en\">Security</span></h2>\n\
          <div class=\"form-grid\" style=\"max-width:480px\">\
          <div class=\"field field--full\">\
-         <label>Текущий пароль <span class=\"en\">Current password</span></label>\
+         <label><span class=\"t-ru\">Текущий пароль</span><span class=\"t-en\">Current password</span></label>\
          <input type=\"password\" id=\"cur-pw\" autocomplete=\"current-password\">\
          </div>\
          <div class=\"field\">\
-         <label>Новый пароль <span class=\"en\">New password</span></label>\
+         <label><span class=\"t-ru\">Новый пароль</span><span class=\"t-en\">New password</span></label>\
          <input type=\"password\" id=\"new-pw\" autocomplete=\"new-password\">\
          </div>\
          <div class=\"field\">\
-         <label>Повторите <span class=\"en\">Confirm</span></label>\
+         <label><span class=\"t-ru\">Повторите</span><span class=\"t-en\">Confirm</span></label>\
          <input type=\"password\" id=\"new-pw2\" autocomplete=\"new-password\">\
          </div>\
          <div class=\"form-actions field--full\">\
-         <button class=\"btn btn--primary\" onclick=\"twChangePassword(this)\">Сменить пароль</button>\
+         <button class=\"btn btn--primary\" onclick=\"twChangePassword(this)\">\
+         <span class=\"t-ru\">Сменить пароль</span><span class=\"t-en\">Change password</span></button>\
          <span id=\"pw-result\" class=\"note\"></span>\
          </div>\
          </div>\n",
@@ -1191,12 +1308,17 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
 
     // ── Reboot ────────────────────────────────────────────────────────────────
     body.push_str(
-        "<h2>Устройство</h2>\n\
+        "<h2><span class=\"t-ru\">Устройство</span><span class=\"t-en\">Device</span></h2>\n\
          <div class=\"danger-zone\">\
-         <div class=\"body\"><div class=\"t\">Перезагрузка устройства</div>\
-         <div class=\"d\">Перезапустит точку доступа; клиенты ненадолго отключатся.</div></div>\
+         <div class=\"body\">\
+         <div class=\"t\">\
+         <span class=\"t-ru\">Перезагрузка устройства</span><span class=\"t-en\">Reboot device</span></div>\
+         <div class=\"d\">\
+         <span class=\"t-ru\">Перезапустит точку доступа; клиенты ненадолго отключатся.</span>\
+         <span class=\"t-en\">Restarts the access point; clients will briefly disconnect.</span></div></div>\
          <button class=\"btn btn--danger\" \
-         onclick=\"act('/api/system/reboot', this, 'Reboot the device?')\">Reboot</button>\
+         onclick=\"act('/api/system/reboot', this, t('Перезагрузить устройство?','Reboot the device?'))\">\
+         Reboot</button>\
          </div>\n",
     );
     body.push_str(SYSTEM_SCRIPT);
