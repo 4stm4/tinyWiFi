@@ -30,11 +30,13 @@ fn default_config() -> TinywifiConfig {
         paths: Paths {
             hostapd_conf: PathBuf::from("/etc/hostapd/hostapd.conf"),
             nanodhcp_conf: PathBuf::from("/etc/nanodhcp/nanodhcp.conf"),
+            nanodns_conf: PathBuf::from("/etc/nanodns/config"),
             leases_file: PathBuf::from("/var/lib/nanodhcp/leases.json"),
         },
         services: Services {
             hostapd: "hostapd".to_string(),
             nanodhcp: "nanodhcp".to_string(),
+            nanodns: "nanodns".to_string(),
             web: "tinywifi-web".to_string(),
             display: "tinywifi-display".to_string(),
         },

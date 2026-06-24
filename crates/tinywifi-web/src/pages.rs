@@ -613,6 +613,10 @@ pub async fn dns(State(st): State<AppState>) -> Html<String> {
          <label for=\"dns-domain\">Локальная зона <span class=\"en\">domain</span></label>\
          <input id=\"dns-domain\" value=\"{domain}\" placeholder=\"lan\">\
          </div>\n\
+         <div class=\"field\">\
+         <label for=\"dns-router-name\">Имя роутера <span class=\"en\">router_name</span></label>\
+         <input id=\"dns-router-name\" value=\"{router_name}\" placeholder=\"router\">\
+         </div>\n\
          <div class=\"field field--full\">\
          <label for=\"dns-upstreams\">Upstream DNS <span class=\"en\">через запятую</span></label>\
          <input id=\"dns-upstreams\" value=\"{upstreams}\" placeholder=\"1.1.1.1:53, 8.8.8.8:53\">\
@@ -625,6 +629,7 @@ pub async fn dns(State(st): State<AppState>) -> Html<String> {
          </form>\n\
          </div></section>\n",
         domain = escape(&settings.domain),
+        router_name = escape(&settings.router_name),
         upstreams = escape(&upstreams_val),
     ));
 
@@ -703,10 +708,11 @@ async function dnsSaveSettings(btn){\n\
   var out=document.getElementById('dns-settings-result');\n\
   btn.disabled=true;out.style.color='';out.textContent='Применяю…';\n\
   var domain=document.getElementById('dns-domain').value.trim();\n\
+  var routerName=document.getElementById('dns-router-name').value.trim();\n\
   var ups=document.getElementById('dns-upstreams').value.split(',').map(function(s){return s.trim();}).filter(Boolean);\n\
   try{\n\
     var r=await fetch('/api/dns',{method:'POST',headers:{'Content-Type':'application/json'},\n\
-      body:JSON.stringify({domain:domain,upstreams:ups})});\n\
+      body:JSON.stringify({domain:domain,router_name:routerName,upstreams:ups})});\n\
     var j={};try{j=await r.json();}catch(e){}\n\
     if(r.ok){out.style.color='green';out.textContent='Применено ✓';setTimeout(function(){location.reload();},1000);}\n\
     else{out.style.color='red';out.textContent='Ошибка: '+(j.error||r.statusText);}\n\
