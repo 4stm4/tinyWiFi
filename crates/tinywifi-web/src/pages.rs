@@ -886,9 +886,10 @@ pub async fn wan(_st: State<AppState>) -> Html<String> {
         })
         .collect();
 
-    let (dhcp_sel, static_sel) = match mode {
-        WanMode::Dhcp   => (" selected", ""),
-        WanMode::Static => ("", " selected"),
+    let (dhcp_sel, static_sel, ppp_sel) = match mode {
+        WanMode::Dhcp   => (" selected", "", ""),
+        WanMode::Static => ("", " selected", ""),
+        WanMode::Ppp    => ("", "", " selected"),
     };
 
     let static_addr = saved.as_ref().and_then(|c| c.address.clone()).unwrap_or_default();
@@ -912,6 +913,7 @@ pub async fn wan(_st: State<AppState>) -> Html<String> {
          <select id=\"wan-mode\" onchange=\"wanModeToggle()\">\
          <option value=\"dhcp\"{dhcp_sel} data-ru=\"DHCP (авто)\" data-en=\"DHCP (auto)\">DHCP (авто)</option>\
          <option value=\"static\"{static_sel} data-ru=\"Static (ручной)\" data-en=\"Static (manual)\">Static (ручной)</option>\
+         <option value=\"ppp\"{ppp_sel} data-ru=\"PPP (модем)\" data-en=\"PPP (modem)\">PPP (модем)</option>\
          </select></div>\n\
          </div>\n\
          <div id=\"wan-static\" style=\"display:none\">\n\
@@ -945,7 +947,11 @@ pub async fn wan(_st: State<AppState>) -> Html<String> {
 const WAN_SCRIPT: &str = "\
 <script>\n\
 function wanModeToggle(){\n\
-  var m=document.getElementById('wan-mode').value;\n\
+  var iface=document.getElementById('wan-iface').value;\n\
+  var msel=document.getElementById('wan-mode');\n\
+  if(iface.startsWith('ppp')&&msel.value!=='ppp') msel.value='ppp';\n\
+  if(!iface.startsWith('ppp')&&msel.value==='ppp') msel.value='dhcp';\n\
+  var m=msel.value;\n\
   document.getElementById('wan-static').style.display=m==='static'?'':'none';\n\
 }\n\
 wanModeToggle();\n\

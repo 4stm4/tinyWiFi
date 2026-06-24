@@ -20,6 +20,7 @@ pub enum WanMode {
     #[default]
     Dhcp,
     Static,
+    Ppp,
 }
 
 /// Persisted WAN config (what the user chose).
@@ -59,7 +60,8 @@ pub enum IfaceState {
 // ── Interface scanning ───────────────────────────────────────────────────────
 
 /// List interfaces that are plausible WAN candidates:
-/// exclude lo, wlan*, wg*, br*, and any interface named wlan.
+/// exclude lo, wlan*, wg*, br*, dummy*. Always include ppp0 when
+/// /etc/ppp/peers/gprs exists (PPP may not be connected yet).
 pub fn wan_candidates() -> Vec<String> {
     let Ok(rd) = std::fs::read_dir("/sys/class/net") else { return Vec::new(); };
     let mut names: Vec<String> = rd
@@ -73,6 +75,12 @@ pub fn wan_candidates() -> Vec<String> {
                 && !n.starts_with("dummy")
         })
         .collect();
+    // Add ppp0 even when pppd is not running (so user can select it)
+    if !names.contains(&"ppp0".to_string())
+        && std::path::Path::new("/etc/ppp/peers/gprs").exists()
+    {
+        names.push("ppp0".to_string());
+    }
     names.sort();
     names
 }
@@ -169,7 +177,11 @@ impl WanConfig {
         let mut s = format!(
             "interface={}\nmode={}\n",
             self.interface,
-            match self.mode { WanMode::Dhcp => "dhcp", WanMode::Static => "static" },
+            match self.mode {
+                WanMode::Dhcp   => "dhcp",
+                WanMode::Static => "static",
+                WanMode::Ppp    => "ppp",
+            },
         );
         if let Some(a) = &self.address { s.push_str(&format!("address={a}\n")); }
         if let Some(g) = &self.gateway { s.push_str(&format!("gateway={g}\n")); }
@@ -192,7 +204,11 @@ fn parse_wan_conf(text: &str) -> Option<WanConfig> {
             match k.trim() {
                 "interface" => { iface = Some(v.trim().to_string()); }
                 "mode" => {
-                    mode = if v.trim() == "static" { WanMode::Static } else { WanMode::Dhcp };
+                    mode = match v.trim() {
+                        "static" => WanMode::Static,
+                        "ppp"    => WanMode::Ppp,
+                        _        => WanMode::Dhcp,
+                    };
                 }
                 "address" => { address = Some(v.trim().to_string()); }
                 "gateway" => { gateway = Some(v.trim().to_string()); }
@@ -215,13 +231,28 @@ pub fn apply_wan(cfg: &WanConfig) -> Result<(), String> {
     // Make sure module is loaded for USB adapters
     let _ = Command::new("modprobe").arg("r8152").output();
 
-    // Bring interface up
-    run("ip", &["link", "set", iface, "up"])?;
+    // PPP interfaces are created by pppd — skip ip link set for them
+    if cfg.mode != WanMode::Ppp {
+        run("ip", &["link", "set", iface, "up"])?;
+    }
 
     match cfg.mode {
-        WanMode::Dhcp => apply_dhcp(iface),
+        WanMode::Dhcp   => apply_dhcp(iface),
         WanMode::Static => apply_static(cfg),
+        WanMode::Ppp    => apply_ppp(),
     }
+}
+
+fn apply_ppp() -> Result<(), String> {
+    // Kill any running pppd instance before starting a new one
+    let _ = Command::new("killall").args(["pppd"]).output();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Spawn pppd in background — connection takes several seconds to establish
+    Command::new("pppd")
+        .args(["call", "gprs"])
+        .spawn()
+        .map_err(|e| format!("pppd: {e}"))?;
+    Ok(())
 }
 
 fn apply_dhcp(iface: &str) -> Result<(), String> {
