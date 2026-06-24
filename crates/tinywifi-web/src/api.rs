@@ -429,3 +429,66 @@ fn dhcp_error(e: DhcpUpdateError) -> ApiError {
     };
     ApiError::new(status, e.to_string())
 }
+
+// ── ACL ───────────────────────────────────────────────────────────────────────
+
+use tinywifi_core::{AclMode, AclState};
+
+pub async fn acl_get(State(_st): State<AppState>) -> Json<AclState> {
+    Json(AclState::load())
+}
+
+#[derive(serde::Deserialize)]
+pub struct AclBody {
+    pub mode: AclMode,
+    pub macs: Vec<String>,
+}
+
+pub async fn acl_post(
+    State(st): State<AppState>,
+    Json(body): Json<AclBody>,
+) -> Result<Json<Value>, ApiError> {
+    let mut state = AclState { mode: body.mode, macs: body.macs };
+    state.macs = state.macs.iter().map(|m| AclState::normalize_mac(m)).collect();
+    state.save().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    state
+        .apply(&st.config.paths.hostapd_conf, &st.config.services.hostapd)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+#[derive(serde::Deserialize)]
+pub struct AclMacBody {
+    pub mac: String,
+}
+
+/// Add a MAC to the blacklist (quick block from leases page).
+pub async fn acl_block(
+    State(st): State<AppState>,
+    Json(body): Json<AclMacBody>,
+) -> Result<Json<Value>, ApiError> {
+    let mut state = AclState::load();
+    if state.mode == AclMode::Disabled {
+        state.mode = AclMode::Blacklist;
+    }
+    state.add(&body.mac);
+    state.save().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    state
+        .apply(&st.config.paths.hostapd_conf, &st.config.services.hostapd)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+/// Remove a MAC from the list (unblock).
+pub async fn acl_unblock(
+    State(st): State<AppState>,
+    Json(body): Json<AclMacBody>,
+) -> Result<Json<Value>, ApiError> {
+    let mut state = AclState::load();
+    state.remove(&body.mac);
+    state.save().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    state
+        .apply(&st.config.paths.hostapd_conf, &st.config.services.hostapd)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}

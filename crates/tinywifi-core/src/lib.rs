@@ -16,6 +16,7 @@ pub mod nanodhcp;
 pub mod safety;
 pub mod service;
 pub mod status;
+pub mod acl;
 pub mod wifi;
 
 pub use amnezia::{
@@ -43,6 +44,7 @@ pub use wan::{
     apply_wan, wan_candidates, wan_status, IfaceState, WanConfig, WanMode, WanStatus,
     WAN_CONF_PATH,
 };
+pub use acl::{AclMode, AclState, ACL_STATE_FILE};
 pub use wifi::{stage_wifi, update_wifi, WifiError, WifiSettings};
 
 /// Crate version, surfaced in the dashboard and on the display.
