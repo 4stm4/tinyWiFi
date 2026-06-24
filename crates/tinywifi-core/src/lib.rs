@@ -18,6 +18,7 @@ pub mod safety;
 pub mod service;
 pub mod status;
 pub mod acl;
+pub mod monitor;
 pub mod wifi;
 
 pub use amnezia::{
@@ -46,6 +47,10 @@ pub use wan::{
     WAN_CONF_PATH,
 };
 pub use acl::{AclMode, AclState, ACL_STATE_FILE};
+pub use monitor::{
+    detect_monitor_adapter, disable_monitor, enable_monitor, monitor_status, refresh_scan,
+    MonitorAdapter, MonitorHandle, MonitorState, MonitorStatus, ScannedAp,
+};
 pub use nanodns::{
     add_dns_record, get_dns_settings, list_dns_records, remove_dns_record, update_dns_settings,
     DnsError, DnsRecord, DnsRecordError, NanoDnsSettings,

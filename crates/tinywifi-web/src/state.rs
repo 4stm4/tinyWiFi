@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tinywifi_core::{AutoRevert, HostapdConf, TinywifiConfig};
+use tinywifi_core::{AutoRevert, HostapdConf, MonitorHandle, TinywifiConfig};
 
 use crate::auth;
 
@@ -17,6 +17,7 @@ pub struct AppState {
     pub pending: PendingReverts,
     pub sessions: auth::Sessions,
     pub login_attempts: auth::LoginAttempts,
+    pub monitor: MonitorHandle,
 }
 
 impl AppState {
@@ -26,6 +27,7 @@ impl AppState {
             pending: Arc::new(Mutex::new(HashMap::new())),
             sessions: auth::new_sessions(),
             login_attempts: auth::new_login_attempts(),
+            monitor: MonitorHandle::new(),
         }
     }
 

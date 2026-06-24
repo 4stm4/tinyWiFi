@@ -1146,6 +1146,28 @@ body { overflow: auto; min-height: 100vh; display: block; }
   color: var(--fg-1);
 }
 
+/* ── Toggle switch ──────────────────────────────────────────────────────── */
+.switch { position: relative; display: inline-block; width: 48px; height: 26px; cursor: pointer; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch__knob {
+  position: absolute; inset: 0;
+  background: var(--border-2);
+  border-radius: 26px;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.switch__knob::after {
+  content: ''; position: absolute;
+  left: 3px; top: 3px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.switch input:checked ~ .switch__knob { background: var(--accent); }
+.switch input:checked ~ .switch__knob::after { transform: translateX(22px); }
+.switch input:disabled ~ .switch__knob { opacity: .45; cursor: not-allowed; }
+
 /* ── i18n: dual-language spans ──────────────────────────────────────────── */
 /* Default is Russian; "en" hides Russian spans and shows English ones.     */
 html:not([data-lang="en"]) .t-en { display: none }

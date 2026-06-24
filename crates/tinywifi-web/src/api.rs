@@ -11,14 +11,15 @@ use serde_json::{json, Value};
 
 use crate::auth;
 use tinywifi_core::{
-    add_dns_record, add_static_lease, apply_wan, discard_backup, get_dns_settings, iface_traffic,
-    import_tunnel, leases::LeasesReport, list_dns_records, list_static_leases, load_bypass_list,
-    remove_dns_record, remove_static_lease, revert, save_bypass_list, scan_tunnels,
+    add_dns_record, add_static_lease, apply_wan, detect_monitor_adapter, disable_monitor,
+    discard_backup, enable_monitor, get_dns_settings, iface_traffic, import_tunnel,
+    leases::LeasesReport, list_dns_records, list_static_leases, load_bypass_list, monitor_status,
+    refresh_scan, remove_dns_record, remove_static_lease, revert, save_bypass_list, scan_tunnels,
     service_restart, service_status, stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp,
     update_dns_settings, update_wifi, wan_candidates, wan_status, AutoRevert, AwgTunnel,
     AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, DnsRecord, DnsRecordError,
-    HostapdConf, NanoDnsSettings, StaticLease, StaticLeaseError, SystemStatus, WanConfig,
-    WanStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
+    HostapdConf, MonitorState, NanoDnsSettings, StaticLease, StaticLeaseError, SystemStatus,
+    WanConfig, WanStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -543,6 +544,42 @@ pub async fn dns_records_delete(
     remove_dns_record(&st.config.paths.nanodns_conf, &key.name, &key.rtype)
         .map_err(dns_record_error)?;
     Ok(ok())
+}
+
+// ── Monitor ───────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct MonitorToggle {
+    pub state: MonitorState,
+}
+
+pub async fn monitor_get(State(st): State<AppState>) -> Json<Value> {
+    // Refresh scan results if monitoring is active
+    refresh_scan(&st.monitor);
+    let status = monitor_status(&st.monitor);
+    Json(serde_json::to_value(status).unwrap_or(json!({})))
+}
+
+pub async fn monitor_post(
+    State(st): State<AppState>,
+    Json(body): Json<MonitorToggle>,
+) -> Result<Json<Value>, ApiError> {
+    match body.state {
+        MonitorState::On => {
+            enable_monitor(&st.monitor)
+                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        }
+        MonitorState::Off => {
+            disable_monitor(&st.monitor)
+                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        }
+    }
+    Ok(ok())
+}
+
+pub async fn monitor_detect(_st: State<AppState>) -> Json<Value> {
+    let adapter = detect_monitor_adapter();
+    Json(serde_json::to_value(adapter).unwrap_or(json!(null)))
 }
 
 fn dns_record_error(e: DnsRecordError) -> ApiError {

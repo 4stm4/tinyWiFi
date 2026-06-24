@@ -88,6 +88,9 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/system/reboot", post(api::reboot))
         .route("/api/auth/password", post(api::change_password))
+        .route("/monitor", get(pages::monitor))
+        .route("/api/monitor", get(api::monitor_get).post(api::monitor_post))
+        .route("/api/monitor/detect", get(api::monitor_detect))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_auth,

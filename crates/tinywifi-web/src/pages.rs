@@ -9,10 +9,10 @@ use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::{AclMode, AclState};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    get_dns_settings, hostname, interface_ipv4, kernel_version, list_dns_records, list_static_leases,
-    ntp_servers, scan_tunnels, service_status, wan_candidates, wan_status, AwgTunnelStatus,
-    DhcpConfig, HostapdConf, IfaceState, ServiceStatus, SystemStatus, WanConfig, WanMode,
-    AWG_CONF_DIR,
+    get_dns_settings, hostname, interface_ipv4, kernel_version,
+    list_dns_records, list_static_leases, monitor_status, ntp_servers, scan_tunnels,
+    service_status, wan_candidates, wan_status, AwgTunnelStatus, DhcpConfig, HostapdConf,
+    IfaceState, MonitorState, ServiceStatus, SystemStatus, WanConfig, WanMode, AWG_CONF_DIR,
 };
 
 use crate::auth;
@@ -106,6 +106,7 @@ const NAV_I18N: &[(&str, &str, &str)] = &[
     ("/leases",    "Клиенты", "Clients"),
     ("/wan",       "WAN",     "WAN"),
     ("/vpn",       "VPN",     "VPN"),
+    ("/monitor",   "Радар",   "Radar"),
     ("/system",    "Система", "System"),
 ];
 
@@ -1331,3 +1332,125 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
 
     layout("Система", "System", "/system", &body)
 }
+
+// ── Monitor page ──────────────────────────────────────────────────────────────
+
+pub async fn monitor(State(st): State<AppState>) -> Html<String> {
+    let status = monitor_status(&st.monitor);
+    let is_on = status.state == MonitorState::On;
+    let switch_cls = if is_on { "switch switch--on" } else { "switch" };
+    let switch_label = if is_on {
+        "<span class=\"t-ru\">Включён</span><span class=\"t-en\">On</span>"
+    } else {
+        "<span class=\"t-ru\">Выключен</span><span class=\"t-en\">Off</span>"
+    };
+
+    // Adapter card
+    let adapter_html = match &status.adapter {
+        None => {
+            "<div class=\"empty\">\
+             <span class=\"t-ru\">Дополнительный WiFi адаптер не обнаружен.</span>\
+             <span class=\"t-en\">No secondary WiFi adapter detected.</span></div>".to_string()
+        }
+        Some(a) => {
+            let mon_support = if a.supports_monitor {
+                "<span class=\"pill pill--ok\">Monitor mode</span>"
+            } else {
+                "<span class=\"pill pill--failed\">\
+                 <span class=\"t-ru\">Не поддерживается</span>\
+                 <span class=\"t-en\">Not supported</span></span>"
+            };
+            format!(
+                "<table class=\"tbl\"><tbody>\
+                 <tr><th>Interface</th><td><code>{}</code></td></tr>\
+                 <tr><th>PHY</th><td><code>{}</code></td></tr>\
+                 <tr><th>Driver</th><td><code>{}</code></td></tr>\
+                 <tr><th><span class=\"t-ru\">Monitor mode</span><span class=\"t-en\">Monitor mode</span></th><td>{mon_support}</td></tr>\
+                 </tbody></table>",
+                escape(&a.iface), escape(&a.phy), escape(&a.driver)
+            )
+        }
+    };
+
+    // Scan results table
+    let scan_html = if !status.scan.is_empty() {
+        let mut t = String::from(
+            "<table class=\"tbl\" style=\"margin-top:.75rem\"><thead>\
+             <tr>\
+             <th>BSSID</th>\
+             <th>SSID</th>\
+             <th><span class=\"t-ru\">Канал</span><span class=\"t-en\">Channel</span></th>\
+             <th><span class=\"t-ru\">Сигнал</span><span class=\"t-en\">Signal</span></th>\
+             </tr></thead><tbody>\n"
+        );
+        for ap in &status.scan {
+            t.push_str(&format!(
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{} dBm</td></tr>\n",
+                escape(&ap.bssid), escape(&ap.ssid), ap.channel, ap.signal
+            ));
+        }
+        t.push_str("</tbody></table>\n");
+        t
+    } else if is_on {
+        "<div class=\"empty\" style=\"margin-top:.5rem\">\
+         <span class=\"t-ru\">Сканирование…</span><span class=\"t-en\">Scanning…</span></div>"
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    let disabled = if status.adapter.as_ref().map(|a| a.supports_monitor).unwrap_or(false) {
+        ""
+    } else {
+        " disabled"
+    };
+
+    let body = format!(
+        "<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n\
+         <h2 style=\"margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Адаптер</span><span class=\"t-en\">Adapter</span></h2>\n\
+         {adapter_html}\
+         </div></section>\n\
+         <section class=\"card\"><div class=\"card__body\">\n\
+         <div style=\"display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem\">\
+         <h2 style=\"margin:0\">\
+         <span class=\"t-ru\">Пассивное сканирование</span><span class=\"t-en\">Passive scan</span></h2>\
+         <label class=\"{switch_cls}\" title=\"toggle\">\
+         <input type=\"checkbox\" id=\"mon-switch\"{}{disabled} onchange=\"monToggle(this)\">\
+         <span class=\"switch__knob\"></span></label>\
+         </div>\n\
+         <div style=\"font-size:.85rem;color:var(--muted);margin-bottom:.5rem\">{switch_label}</div>\n\
+         {scan_html}\
+         <p id=\"mon-result\" role=\"status\" style=\"font-size:.85rem;margin:.5rem 0 0\"></p>\n\
+         </div></section>\n\
+         {MONITOR_SCRIPT}",
+        if is_on { " checked" } else { "" },
+    );
+
+    layout("Радар", "Radar", "/monitor", &body)
+}
+
+const MONITOR_SCRIPT: &str = "\
+<script>\n\
+async function monToggle(cb){\n\
+  var out=document.getElementById('mon-result');\n\
+  var state=cb.checked?'on':'off';\n\
+  cb.disabled=true;\n\
+  out.style.color='';\n\
+  out.textContent=state==='on'?t('Включаю…','Enabling…'):t('Выключаю…','Disabling…');\n\
+  try{\n\
+    var r=await fetch('/api/monitor',{method:'POST',\n\
+      headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({state:state})});\n\
+    var j={}; try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';\n\
+      out.textContent=state==='on'?t('Сканирование запущено ✓','Scanning started ✓'):t('Остановлено ✓','Stopped ✓');\n\
+      setTimeout(function(){location.reload();},1500);\n\
+    }else{out.style.color='red';\n\
+      out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);\n\
+      cb.checked=!cb.checked;\n\
+    }\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;cb.checked=!cb.checked;}\n\
+  cb.disabled=false;\n\
+}\n\
+</script>\n";
