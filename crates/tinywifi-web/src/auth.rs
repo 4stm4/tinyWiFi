@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::SaltString;
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
 
 pub const SESSION_COOKIE: &str = "tw_sess";
 pub const AUTH_FILE: &str = "/etc/tinywifi/auth";
@@ -53,23 +53,50 @@ pub fn session_remove(sessions: &Sessions, token: &str) {
     sessions.lock().unwrap().remove(token);
 }
 
+// Lightweight params for embedded hardware (Pi-class).
+// Default argon2 uses m=65536 KiB (64 MB) which stalls QEMU guests.
+// 8 MB / 2 iterations is still strong for a local-only admin interface.
+fn argon2_params() -> Params {
+    Params::new(8192, 2, 1, None).expect("valid argon2 params")
+}
+
+fn argon2() -> Argon2<'static> {
+    Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, argon2_params())
+}
+
 pub fn hash_password(password: &str) -> Result<String, String> {
     let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
+    argon2()
         .hash_password(password.as_bytes(), &salt)
         .map(|h| h.to_string())
         .map_err(|e| e.to_string())
 }
 
 pub fn verify_password(password: &str, hash: &str) -> bool {
-    PasswordHash::new(hash)
-        .ok()
-        .map(|h| {
-            Argon2::default()
-                .verify_password(password.as_bytes(), &h)
-                .is_ok()
-        })
-        .unwrap_or(false)
+    let parsed = match PasswordHash::new(hash) {
+        Ok(h) => h,
+        Err(_) => return false,
+    };
+    // Verification uses the params embedded in the PHC string.
+    // Use default() so it can handle any stored params (including old m=65536).
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
+}
+
+/// After a successful login, re-hash with lightweight params if the stored
+/// hash was created with heavy defaults (m_cost > our 8 MiB target).
+pub fn maybe_upgrade_hash(password: &str) {
+    let Some(hash) = read_hash() else { return };
+    let Ok(parsed) = PasswordHash::new(&hash) else { return };
+    let heavy = Params::try_from(&parsed)
+        .map(|p| p.m_cost() > 8192)
+        .unwrap_or(false);
+    if heavy {
+        if let Ok(new_hash) = hash_password(password) {
+            let _ = write_hash(&new_hash);
+        }
+    }
 }
 
 pub fn read_hash() -> Option<String> {

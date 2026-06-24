@@ -355,6 +355,7 @@ pub async fn login_post(
 ) -> Response {
     let hash = auth::read_hash().unwrap_or_default();
     if auth::verify_password(&form.password, &hash) {
+        auth::maybe_upgrade_hash(&form.password);
         let token = auth::session_create(&st.sessions);
         let cookie = format!(
             "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
