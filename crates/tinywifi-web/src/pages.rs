@@ -1469,7 +1469,7 @@ pub async fn adblock(State(st): State<AppState>) -> Html<String> {
     };
     let last_updated = match status.last_updated {
         Some(ts) => format!("<span class=\"t-ru\">Обновлён:</span><span class=\"t-en\">Updated:</span> {ts}"),
-        None => "<span class=\"t-ru\">Список не загружен</span><span class=\"t-en\">Blocklist not downloaded</span>".to_string(),
+        None => "<span class=\"t-ru\">Скачивается при первом включении</span><span class=\"t-en\">Downloaded on first enable</span>".to_string(),
     };
     let domain_count = status.domain_count;
     let block_response = escape(&status.block_response);

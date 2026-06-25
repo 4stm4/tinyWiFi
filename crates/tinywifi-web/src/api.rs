@@ -618,6 +618,10 @@ pub async fn adblock_post(
     if body.enabled {
         adblock_enable(path)
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        // Auto-download blocklist on first enable if file is missing/empty
+        if tinywifi_core::count_domains(tinywifi_core::BLOCKLIST_PATH) == 0 {
+            tokio::task::spawn_blocking(update_blocklist);
+        }
     } else {
         adblock_disable(path)
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
