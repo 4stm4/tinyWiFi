@@ -98,13 +98,16 @@ pub fn update_blocklist() -> Result<usize, String> {
 }
 
 fn fetch_url(url: &str) -> Result<String, String> {
-    // Use curl as a subprocess — Pi Zero has it, avoids pulling in reqwest
-    let out = std::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "30", url])
+    let out = std::process::Command::new("wget")
+        .args(["-qO-", "--timeout=30", url])
         .output()
-        .map_err(|e| format!("curl: {e}"))?;
+        .map_err(|e| format!("wget: {e}"))?;
     if !out.status.success() {
-        return Err(format!("curl exit {}", out.status));
+        return Err(format!(
+            "wget exit {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     String::from_utf8(out.stdout).map_err(|e| e.to_string())
 }
