@@ -21,6 +21,8 @@ const K_DOMAIN: &str = "domain";
 const K_ROUTER_NAME: &str = "router_name";
 const K_UPSTREAM: &str = "upstream";
 const K_RECORD: &str = "record";
+const K_BLOCK_FILE: &str = "block_file";
+const K_BLOCK_RESPONSE: &str = "block_response";
 
 // ── Line-preserving config parser ─────────────────────────────────────────────
 
@@ -150,13 +152,18 @@ impl fmt::Display for NanoDnsConf {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/// User-editable DNS settings (zone name, router hostname, and upstream resolvers).
+/// User-editable DNS settings (zone name, router hostname, upstreams, and ad-blocking).
 /// All other config keys are preserved on every write.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NanoDnsSettings {
     pub domain: String,
     pub router_name: String,
     pub upstreams: Vec<String>,
+    /// Path to the blocklist file. None = blocking disabled (key absent from config).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_file: Option<String>,
+    /// What to return for blocked domains: sinkhole IP or "NXDOMAIN".
+    pub block_response: String,
 }
 
 impl Default for NanoDnsSettings {
@@ -165,6 +172,8 @@ impl Default for NanoDnsSettings {
             domain: "lan".to_string(),
             router_name: "router".to_string(),
             upstreams: vec!["1.1.1.1:53".to_string(), "8.8.8.8:53".to_string()],
+            block_file: None,
+            block_response: "0.0.0.0".to_string(),
         }
     }
 }
@@ -246,6 +255,8 @@ pub fn get_dns_settings(path: impl AsRef<Path>) -> Result<NanoDnsSettings, DnsEr
         domain: conf.get(K_DOMAIN).unwrap_or("lan").to_string(),
         router_name: conf.get(K_ROUTER_NAME).unwrap_or("router").to_string(),
         upstreams: conf.get_all(K_UPSTREAM).into_iter().map(String::from).collect(),
+        block_file: conf.get(K_BLOCK_FILE).map(String::from),
+        block_response: conf.get(K_BLOCK_RESPONSE).unwrap_or("0.0.0.0").to_string(),
     })
 }
 
@@ -262,6 +273,12 @@ pub fn update_dns_settings(path: impl AsRef<Path>, settings: &NanoDnsSettings) -
     conf.remove_all(K_UPSTREAM);
     for up in &settings.upstreams {
         conf.append(K_UPSTREAM, up);
+    }
+    conf.remove_all(K_BLOCK_FILE);
+    conf.remove_all(K_BLOCK_RESPONSE);
+    if let Some(bf) = &settings.block_file {
+        conf.append(K_BLOCK_FILE, bf);
+        conf.append(K_BLOCK_RESPONSE, &settings.block_response);
     }
     std::fs::write(path, conf.to_string()).map_err(DnsError::Io)?;
     let _ = service_restart(NANODNS_SERVICE);

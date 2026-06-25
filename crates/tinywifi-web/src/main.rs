@@ -91,6 +91,10 @@ fn build_router(state: AppState) -> Router {
         .route("/monitor", get(pages::monitor))
         .route("/api/monitor", get(api::monitor_get).post(api::monitor_post))
         .route("/api/monitor/detect", get(api::monitor_detect))
+        .route("/adblock", get(pages::adblock))
+        .route("/api/adblock", get(api::adblock_get).post(api::adblock_post))
+        .route("/api/adblock/update", post(api::adblock_update))
+        .route("/api/adblock/custom", post(api::adblock_custom_add).delete(api::adblock_custom_remove))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_auth,

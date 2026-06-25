@@ -9,7 +9,7 @@ use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::{AclMode, AclState};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    get_dns_settings, hostname, interface_ipv4, kernel_version,
+    adblock_status, get_dns_settings, hostname, interface_ipv4, kernel_version,
     list_dns_records, list_static_leases, monitor_status, ntp_servers, scan_tunnels,
     service_status, wan_candidates, wan_status, AwgTunnelStatus, DhcpConfig, HostapdConf,
     IfaceState, MonitorState, ServiceStatus, SystemStatus, WanConfig, WanMode, AWG_CONF_DIR,
@@ -107,6 +107,7 @@ const NAV_I18N: &[(&str, &str, &str)] = &[
     ("/wan",       "WAN",     "WAN"),
     ("/vpn",       "VPN",     "VPN"),
     ("/monitor",   "Радар",   "Radar"),
+    ("/adblock",   "AdBlock", "AdBlock"),
     ("/system",    "Система", "System"),
 ];
 
@@ -1452,5 +1453,134 @@ async function monToggle(cb){\n\
     }\n\
   }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;cb.checked=!cb.checked;}\n\
   cb.disabled=false;\n\
+}\n\
+</script>\n";
+
+// ── AdBlock page ──────────────────────────────────────────────────────────────
+
+pub async fn adblock(State(st): State<AppState>) -> Html<String> {
+    let status = adblock_status(&st.config.paths.nanodns_conf);
+    let is_on = status.enabled;
+    let switch_cls = if is_on { "switch switch--on" } else { "switch" };
+    let switch_label = if is_on {
+        "<span class=\"t-ru\">Включён</span><span class=\"t-en\">Enabled</span>"
+    } else {
+        "<span class=\"t-ru\">Выключен</span><span class=\"t-en\">Disabled</span>"
+    };
+    let last_updated = match status.last_updated {
+        Some(ts) => format!("<span class=\"t-ru\">Обновлён:</span><span class=\"t-en\">Updated:</span> {ts}"),
+        None => "<span class=\"t-ru\">Список не загружен</span><span class=\"t-en\">Blocklist not downloaded</span>".to_string(),
+    };
+    let domain_count = status.domain_count;
+    let block_response = escape(&status.block_response);
+
+    let body = format!(
+        "<section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n\
+         <div style=\"display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem\">\
+         <h2 style=\"margin:0\">\
+         <span class=\"t-ru\">Блокировка рекламы</span><span class=\"t-en\">Ad blocking</span></h2>\
+         <label class=\"{switch_cls}\" title=\"toggle\">\
+         <input type=\"checkbox\" id=\"ab-switch\"{} onchange=\"abToggle(this)\">\
+         <span class=\"switch__knob\"></span></label>\
+         </div>\n\
+         <div style=\"font-size:.85rem;color:var(--muted);margin-bottom:.75rem\">{switch_label}</div>\n\
+         <table class=\"tbl\"><tbody>\
+         <tr><th><span class=\"t-ru\">Доменов</span><span class=\"t-en\">Domains</span></th>\
+             <td><b>{domain_count}</b></td></tr>\
+         <tr><th><span class=\"t-ru\">Ответ</span><span class=\"t-en\">Response</span></th>\
+             <td><code id=\"ab-resp\">{block_response}</code></td></tr>\
+         <tr><th><span class=\"t-ru\">Файл</span><span class=\"t-en\">File</span></th>\
+             <td><code>/etc/nanodns/blocklist</code></td></tr>\
+         <tr><th><span class=\"t-ru\">Источник</span><span class=\"t-en\">Source</span></th>\
+             <td><small style=\"color:var(--muted)\">{last_updated}</small></td></tr>\
+         </tbody></table>\n\
+         <p id=\"ab-result\" role=\"status\" style=\"font-size:.85rem;margin:.5rem 0 0\"></p>\n\
+         </div></section>\n\
+         <section class=\"card\" style=\"margin-bottom:1rem\"><div class=\"card__body\">\n\
+         <h2 style=\"margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Обновить список</span><span class=\"t-en\">Update blocklist</span></h2>\n\
+         <p style=\"font-size:.85rem;color:var(--muted);margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Загружает список StevenBlack (~150 тыс. доменов). \
+         Требует доступ в интернет. Может занять несколько минут.</span>\
+         <span class=\"t-en\">Downloads StevenBlack blocklist (~150k domains). \
+         Requires internet access. May take a few minutes.</span></p>\n\
+         <button class=\"btn btn--primary\" onclick=\"abUpdate()\" id=\"ab-upd-btn\">\
+         <span class=\"t-ru\">Обновить</span><span class=\"t-en\">Update</span></button>\n\
+         <span id=\"ab-upd-result\" style=\"font-size:.85rem;margin-left:.75rem\"></span>\n\
+         </div></section>\n\
+         <section class=\"card\"><div class=\"card__body\">\n\
+         <h2 style=\"margin:0 0 .75rem\">\
+         <span class=\"t-ru\">Добавить домен вручную</span><span class=\"t-en\">Block domain manually</span></h2>\n\
+         <div style=\"display:flex;gap:.5rem;align-items:center\">\
+         <input id=\"ab-domain\" class=\"input\" type=\"text\" placeholder=\"example.com\" \
+                style=\"flex:1;max-width:300px\" onkeydown=\"if(event.key==='Enter')abAdd()\">\
+         <button class=\"btn btn--sm btn--primary\" onclick=\"abAdd()\">\
+         <span class=\"t-ru\">Добавить</span><span class=\"t-en\">Add</span></button>\
+         </div>\n\
+         <p id=\"ab-add-result\" role=\"status\" style=\"font-size:.85rem;margin:.5rem 0 0\"></p>\n\
+         </div></section>\n\
+         {ADBLOCK_SCRIPT}",
+        if is_on { " checked" } else { "" },
+    );
+
+    layout("AdBlock", "AdBlock", "/adblock", &body)
+}
+
+const ADBLOCK_SCRIPT: &str = "\
+<script>\n\
+async function abToggle(cb){\n\
+  var out=document.getElementById('ab-result');\n\
+  cb.disabled=true;\n\
+  out.style.color='';out.textContent=t('Применяю…','Applying…');\n\
+  try{\n\
+    var r=await fetch('/api/adblock',{method:'POST',\n\
+      headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({enabled:cb.checked})});\n\
+    var j={}; try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';\n\
+      out.textContent=cb.checked?t('Включён ✓','Enabled ✓'):t('Выключен ✓','Disabled ✓');\n\
+      setTimeout(function(){location.reload();},1200);\n\
+    }else{out.style.color='red';\n\
+      out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);\n\
+      cb.checked=!cb.checked;\n\
+    }\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;cb.checked=!cb.checked;}\n\
+  cb.disabled=false;\n\
+}\n\
+async function abUpdate(){\n\
+  var btn=document.getElementById('ab-upd-btn');\n\
+  var out=document.getElementById('ab-upd-result');\n\
+  btn.disabled=true;\n\
+  out.style.color='';out.textContent=t('Загружаю…','Downloading…');\n\
+  try{\n\
+    var r=await fetch('/api/adblock/update',{method:'POST'});\n\
+    var j={}; try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';\n\
+      out.textContent=t('Готово, доменов: ','Done, domains: ')+(j.domains||0);\n\
+      setTimeout(function(){location.reload();},2000);\n\
+    }else{out.style.color='red';\n\
+      out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);\n\
+    }\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
+  btn.disabled=false;\n\
+}\n\
+async function abAdd(){\n\
+  var inp=document.getElementById('ab-domain');\n\
+  var out=document.getElementById('ab-add-result');\n\
+  var d=inp.value.trim();\n\
+  if(!d)return;\n\
+  out.style.color='';out.textContent=t('Добавляю…','Adding…');\n\
+  try{\n\
+    var r=await fetch('/api/adblock/custom',{method:'POST',\n\
+      headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({domain:d})});\n\
+    var j={}; try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';\n\
+      out.textContent=t('Добавлен: ','Added: ')+d;\n\
+      inp.value='';\n\
+    }else{out.style.color='red';\n\
+      out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);\n\
+    }\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
 }\n\
 </script>\n";

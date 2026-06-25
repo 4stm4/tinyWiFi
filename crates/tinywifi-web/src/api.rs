@@ -11,15 +11,17 @@ use serde_json::{json, Value};
 
 use crate::auth;
 use tinywifi_core::{
-    add_dns_record, add_static_lease, apply_wan, detect_monitor_adapter, disable_monitor,
+    add_custom_block, add_dns_record, add_static_lease, adblock_disable, adblock_enable,
+    adblock_set_response, adblock_status, apply_wan, detect_monitor_adapter, disable_monitor,
     discard_backup, enable_monitor, get_dns_settings, iface_traffic, import_tunnel,
     leases::LeasesReport, list_dns_records, list_static_leases, load_bypass_list, monitor_status,
-    refresh_scan, remove_dns_record, remove_static_lease, revert, save_bypass_list, scan_tunnels,
-    service_restart, service_status, stage_dhcp, stage_wifi, tunnel_down, tunnel_up, update_dhcp,
-    update_dns_settings, update_wifi, wan_candidates, wan_status, AutoRevert, AwgTunnel,
-    AwgTunnelStatus, DhcpConfig, DhcpSettings, DhcpUpdateError, DnsRecord, DnsRecordError,
-    HostapdConf, MonitorState, NanoDnsSettings, StaticLease, StaticLeaseError, SystemStatus,
-    WanConfig, WanStatus, WifiConfig, WifiError, WifiSettings, AWG_CONF_DIR,
+    refresh_scan, remove_custom_block, remove_dns_record, remove_static_lease, revert,
+    save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp, stage_wifi,
+    tunnel_down, tunnel_up, update_blocklist, update_dhcp, update_dns_settings, update_wifi,
+    wan_candidates, wan_status, AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings,
+    DhcpUpdateError, DnsRecord, DnsRecordError, HostapdConf, MonitorState, NanoDnsSettings,
+    StaticLease, StaticLeaseError, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError,
+    WifiSettings, AWG_CONF_DIR,
 };
 
 use crate::state::AppState;
@@ -589,4 +591,65 @@ fn dns_record_error(e: DnsRecordError) -> ApiError {
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     ApiError::new(status, e.to_string())
+}
+
+// ── Adblock ───────────────────────────────────────────────────────────────────
+
+pub async fn adblock_get(State(st): State<AppState>) -> Json<Value> {
+    let status = adblock_status(&st.config.paths.nanodns_conf);
+    Json(serde_json::to_value(status).unwrap_or(json!({})))
+}
+
+#[derive(Deserialize)]
+pub struct AdblockToggleBody {
+    pub enabled: bool,
+    pub block_response: Option<String>,
+}
+
+pub async fn adblock_post(
+    State(st): State<AppState>,
+    Json(body): Json<AdblockToggleBody>,
+) -> Result<Json<Value>, ApiError> {
+    let path = &st.config.paths.nanodns_conf;
+    if let Some(resp) = &body.block_response {
+        adblock_set_response(path, resp)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    }
+    if body.enabled {
+        adblock_enable(path)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    } else {
+        adblock_disable(path)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    }
+    Ok(ok())
+}
+
+pub async fn adblock_update(_st: State<AppState>) -> Result<Json<Value>, ApiError> {
+    let count = tokio::task::spawn_blocking(update_blocklist)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({ "status": "ok", "domains": count })))
+}
+
+#[derive(Deserialize)]
+pub struct CustomBlockBody {
+    pub domain: String,
+}
+
+pub async fn adblock_custom_add(
+    Json(body): Json<CustomBlockBody>,
+) -> Result<Json<Value>, ApiError> {
+    add_custom_block(&body.domain)
+        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e))?;
+    Ok(ok())
+}
+
+pub async fn adblock_custom_remove(
+    Json(body): Json<CustomBlockBody>,
+) -> Result<Json<Value>, ApiError> {
+    remove_custom_block(&body.domain)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
 }

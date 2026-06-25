@@ -4,6 +4,7 @@
 //! Project rule: always check service/file/interface availability *before*
 //! reading, restarting, or rendering data.
 
+pub mod adblock;
 pub mod amnezia;
 pub mod wan;
 pub mod config;
@@ -56,6 +57,11 @@ pub use nanodns::{
     DnsError, DnsRecord, DnsRecordError, NanoDnsSettings,
 };
 pub use wifi::{stage_wifi, update_wifi, WifiError, WifiSettings};
+pub use adblock::{
+    adblock_disable, adblock_enable, adblock_set_response, adblock_status,
+    add_custom_block, count_domains, remove_custom_block, update_blocklist,
+    AdblockStatus, BLOCKLIST_PATH,
+};
 
 /// Crate version, surfaced in the dashboard and on the display.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
