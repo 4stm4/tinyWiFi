@@ -98,13 +98,13 @@ pub fn update_blocklist() -> Result<usize, String> {
 }
 
 fn fetch_url(url: &str) -> Result<String, String> {
-    let out = std::process::Command::new("wget")
-        .args(["-qO-", "--timeout=30", url])
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", "--connect-timeout", "30", url])
         .output()
-        .map_err(|e| format!("wget: {e}"))?;
+        .map_err(|e| format!("curl: {e}"))?;
     if !out.status.success() {
         return Err(format!(
-            "wget exit {}: {}",
+            "curl exit {}: {}",
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
         ));
