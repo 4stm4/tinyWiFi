@@ -38,6 +38,23 @@ pub fn memory() -> Option<Memory> {
         .and_then(|c| parse_meminfo(&c))
 }
 
+/// Instantaneous CPU usage percent (non-blocking, uses 1-min load average).
+pub fn cpu_percent() -> Option<u8> {
+    let [load1, _, _] = load_average()?;
+    let ncpu = std::fs::read_to_string("/sys/devices/system/cpu/online")
+        .ok()
+        .and_then(|s| {
+            s.trim()
+                .rsplit('-')
+                .next()?
+                .parse::<f64>()
+                .ok()
+                .map(|n| n + 1.0)
+        })
+        .unwrap_or(4.0);
+    Some((load1 / ncpu * 100.0).min(100.0).round() as u8)
+}
+
 /// The 1/5/15-minute load averages, from `/proc/loadavg`.
 pub fn load_average() -> Option<[f64; 3]> {
     std::fs::read_to_string("/proc/loadavg")

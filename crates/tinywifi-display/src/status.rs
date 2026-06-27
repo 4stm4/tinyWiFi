@@ -15,6 +15,7 @@ pub struct DisplayStatus {
     pub clients: usize,
     pub wan: bool,
     pub ram_used_percent: Option<u8>,
+    pub cpu_used_percent: Option<u8>,
     pub uptime_secs: Option<u64>,
 }
 
@@ -26,6 +27,7 @@ impl DisplayStatus {
             && self.clients == other.clients
             && self.wan == other.wan
             && self.ram_used_percent == other.ram_used_percent
+            && self.cpu_used_percent == other.cpu_used_percent
     }
 
     /// Gather a fresh snapshot via core's guarded readers.
@@ -51,6 +53,7 @@ impl DisplayStatus {
             clients,
             wan: has_default_route(),
             ram_used_percent: metrics::memory().map(|m| m.used_percent()),
+            cpu_used_percent: metrics::cpu_percent(),
             uptime_secs: metrics::uptime_secs(),
         }
     }

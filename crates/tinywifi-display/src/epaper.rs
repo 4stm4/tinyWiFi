@@ -14,10 +14,14 @@ use std::thread;
 use std::time::Duration;
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_7X13_BOLD, FONT_9X18_BOLD, FONT_10X20}, MonoTextStyle},
+    geometry::Angle,
+    mono_font::{
+        ascii::{FONT_6X10, FONT_7X13_BOLD, FONT_9X18_BOLD, FONT_10X20},
+        MonoTextStyle,
+    },
     pixelcolor::BinaryColor,
     prelude::*,
-    primitives::{Line, PrimitiveStyle, Rectangle},
+    primitives::{Arc, Circle, Ellipse, Line, PrimitiveStyle, Rectangle},
     text::{Baseline, Text},
 };
 use spidev::{SpiModeFlags, Spidev, SpidevOptions};
@@ -50,8 +54,6 @@ fn gpio_base() -> u32 {
             let base_path = entry.path().join("base");
             if let Ok(v) = fs::read_to_string(&base_path) {
                 if let Ok(n) = v.trim().parse::<u32>() {
-                    // The chip that owns BCM GPIO 0-53 will have the highest base
-                    // among chips with ngpio>=54; take the first match with ngpio>=54.
                     let ngpio_path = entry.path().join("ngpio");
                     if let Ok(ng) = fs::read_to_string(&ngpio_path) {
                         if let Ok(ng) = ng.trim().parse::<u32>() {
@@ -228,7 +230,9 @@ impl EpaperRenderer {
     }
 }
 
-// Draw text three times with 1-px offsets to simulate extra-bold strokes.
+// ── Drawing helpers ───────────────────────────────────────────────────────────
+
+// Draw text with 2×3 offset grid for extra-bold appearance.
 fn xbold(buf: &mut Buf, text: &str, x: i32, y: i32, style: MonoTextStyle<BinaryColor>) {
     for (dx, dy) in [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)] {
         Text::with_baseline(text, Point::new(x + dx, y + dy), style, Baseline::Top)
@@ -236,6 +240,117 @@ fn xbold(buf: &mut Buf, text: &str, x: i32, y: i32, style: MonoTextStyle<BinaryC
             .ok();
     }
 }
+
+fn sep(buf: &mut Buf, y: i32) {
+    let st = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+    Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
+        .into_styled(st)
+        .draw(buf)
+        .ok();
+}
+
+/// Circular progress gauge.
+/// - background thin circle
+/// - thick arc from 12 o'clock clockwise for `pct`%
+/// - label ("RAM"/"CPU") and percentage centered inside
+fn draw_gauge(buf: &mut Buf, cx: i32, cy: i32, r: u32, pct: u8, label: &str) {
+    let thin = PrimitiveStyle::with_stroke(BinaryColor::On, 2);
+    let thick = PrimitiveStyle::with_stroke(BinaryColor::On, 4);
+
+    // Background circle
+    Circle::with_center(Point::new(cx, cy), r * 2)
+        .into_styled(thin)
+        .draw(buf)
+        .ok();
+
+    // Progress arc (clockwise from 12 o'clock; in e-g coords 270°=-90° is up on screen,
+    // positive sweep is clockwise on screen because Y-axis is inverted).
+    if pct > 0 {
+        let sweep = pct as f32 / 100.0 * 360.0;
+        Arc::new(
+            Point::new(cx - r as i32, cy - r as i32),
+            r * 2,
+            Angle::from_degrees(-90.0),
+            Angle::from_degrees(sweep),
+        )
+        .into_styled(thick)
+        .draw(buf)
+        .ok();
+    }
+
+    // Label ("RAM" / "CPU") — FONT_6X10, centered above middle
+    let f_label = FONT_6X10;
+    let lw = label.len() as i32 * f_label.character_size.width as i32;
+    let label_style = MonoTextStyle::new(&f_label, BinaryColor::On);
+    Text::with_baseline(
+        label,
+        Point::new(cx - lw / 2, cy - 12),
+        label_style,
+        Baseline::Top,
+    )
+    .draw(buf)
+    .ok();
+
+    // Percentage — FONT_7X13_BOLD, centered below label
+    let pct_str = format!("{pct}%");
+    let pw = pct_str.len() as i32 * FONT_7X13_BOLD.character_size.width as i32;
+    let pct_style = MonoTextStyle::new(&FONT_7X13_BOLD, BinaryColor::On);
+    Text::with_baseline(
+        &pct_str,
+        Point::new(cx - pw / 2, cy),
+        pct_style,
+        Baseline::Top,
+    )
+    .draw(buf)
+    .ok();
+}
+
+/// Two-person silhouette at (x, y) top-left, ~18×18 area.
+fn draw_icon_people(buf: &mut Buf, x: i32, y: i32) {
+    let st = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+    // back person (right, higher)
+    Circle::with_center(Point::new(x + 12, y + 4), 6).into_styled(st).draw(buf).ok();
+    Circle::with_center(Point::new(x + 12, y + 13), 10).into_styled(st).draw(buf).ok();
+    // front person (left, lower)
+    Circle::with_center(Point::new(x + 7, y + 6), 6).into_styled(st).draw(buf).ok();
+    Circle::with_center(Point::new(x + 7, y + 15), 10).into_styled(st).draw(buf).ok();
+}
+
+/// Globe icon at (x, y) top-left, ~18×18 area.
+fn draw_icon_globe(buf: &mut Buf, x: i32, y: i32) {
+    let st = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+    let cx = x + 9;
+    let cy = y + 9;
+    // outer circle
+    Circle::with_center(Point::new(cx, cy), 18).into_styled(st).draw(buf).ok();
+    // equator
+    Line::new(Point::new(cx - 9, cy), Point::new(cx + 9, cy))
+        .into_styled(st).draw(buf).ok();
+    // central meridian
+    Line::new(Point::new(cx, cy - 9), Point::new(cx, cy + 9))
+        .into_styled(st).draw(buf).ok();
+    // inner longitude ellipse
+    Ellipse::with_center(Point::new(cx, cy), Size::new(9, 18))
+        .into_styled(st).draw(buf).ok();
+}
+
+/// Clock icon at (x, y) top-left, ~18×18 area.
+fn draw_icon_clock(buf: &mut Buf, x: i32, y: i32) {
+    let st  = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+    let st2 = PrimitiveStyle::with_stroke(BinaryColor::On, 2);
+    let cx = x + 9;
+    let cy = y + 9;
+    // outer circle
+    Circle::with_center(Point::new(cx, cy), 18).into_styled(st).draw(buf).ok();
+    // minute hand (12 o'clock)
+    Line::new(Point::new(cx, cy), Point::new(cx, cy - 6))
+        .into_styled(st2).draw(buf).ok();
+    // hour hand (3 o'clock)
+    Line::new(Point::new(cx, cy), Point::new(cx + 5, cy))
+        .into_styled(st2).draw(buf).ok();
+}
+
+// ── Renderer impl ─────────────────────────────────────────────────────────────
 
 impl Renderer for EpaperRenderer {
     fn is_available(&self) -> bool {
@@ -245,54 +360,60 @@ impl Renderer for EpaperRenderer {
     fn render(&mut self, st: &DisplayStatus) -> io::Result<()> {
         self.buf.clear();
 
-        let fill   = PrimitiveStyle::with_fill(BinaryColor::On);
-        let stroke = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+        let fill = PrimitiveStyle::with_fill(BinaryColor::On);
 
-        // ── Title bar: "4STM4" + "TinyWifi" white on black (44px) ──────────
+        // ── Title bar (0-44): white text on black ──────────────────────────
         Rectangle::new(Point::new(0, 0), Size::new(W, 44))
             .into_styled(fill)
             .draw(&mut self.buf).ok();
 
-        // character_spacing lives on MonoFont, not on MonoTextStyle — copy the
-        // static font struct and set the field before borrowing it.
         let mut f_brand = FONT_7X13_BOLD;  f_brand.character_spacing = 4;
         let mut f_title = FONT_10X20;      f_title.character_spacing = 2;
-        let mut f_data  = FONT_9X18_BOLD;  f_data.character_spacing  = 2;
 
-        // "4STM4" — brand label, small, spaced out
         xbold(&mut self.buf, "4STM4",    4, 2,  MonoTextStyle::new(&f_brand, BinaryColor::Off));
-        // "TinyWifi" — product name
         xbold(&mut self.buf, "TinyWifi", 3, 18, MonoTextStyle::new(&f_title, BinaryColor::Off));
 
-        // ── Data styles ────────────────────────────────────────────────────
-        // IP needs 0 extra spacing (13 chars × 9px = 117px, barely fits at 122px).
-        let ip_s   = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
+        sep(&mut self.buf, 44);
+
+        // ── IP row (45-72) ─────────────────────────────────────────────────
+        let ip = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
+        xbold(&mut self.buf, &ip, 3, 48, MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On));
+
+        sep(&mut self.buf, 73);
+
+        // ── Circular gauges (74-147): RAM left, CPU right ──────────────────
+        // Gauge centers: left cx=32, right cx=92, cy=110, r=27
+        let ram = st.ram_used_percent.unwrap_or(0);
+        let cpu = st.cpu_used_percent.unwrap_or(0);
+        draw_gauge(&mut self.buf, 32,  110, 27, ram, "RAM");
+        draw_gauge(&mut self.buf, 92,  110, 27, cpu, "CPU");
+
+        sep(&mut self.buf, 148);
+
+        // ── Icon rows ──────────────────────────────────────────────────────
+        let mut f_data = FONT_9X18_BOLD; f_data.character_spacing = 1;
         let data_s = MonoTextStyle::new(&f_data, BinaryColor::On);
 
-        // ── Data rows: IP | sep | Clients, WAN | sep | RAM, Up ─────────────
-        let ip      = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
+        // clients (148-183, center y=165)
+        draw_icon_people(&mut self.buf, 2, 157);
         let clients = format!("{} clients", st.clients);
-        let wan     = if st.wan { "WAN: OK" } else { "WAN: NO" };
-        let ram     = st.ram_used_percent.map(|p| format!("RAM {p}%")).unwrap_or_else(|| "RAM —".into());
-        let up      = st.uptime_secs.map(|s| format!("Up  {}", short_uptime(s))).unwrap_or_else(|| "Up —".into());
+        xbold(&mut self.buf, &clients, 22, 157, data_s);
 
-        xbold(&mut self.buf, &ip, 3, 48, ip_s);
+        sep(&mut self.buf, 184);
 
-        for (y, text) in [
-            (84,  clients.as_str()),
-            (122, wan),
-            (160, ram.as_str()),
-            (198, up.as_str()),
-        ] {
-            xbold(&mut self.buf, text, 3, y, data_s);
-        }
+        // WAN (184-213, center y=199)
+        draw_icon_globe(&mut self.buf, 2, 191);
+        let wan = if st.wan { "WAN: OK" } else { "WAN: NO" };
+        xbold(&mut self.buf, wan, 22, 191, data_s);
 
-        // Section separators
-        for y in [74_i32, 148] {
-            Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
-                .into_styled(stroke)
-                .draw(&mut self.buf).ok();
-        }
+        sep(&mut self.buf, 214);
+
+        // uptime (214-249, center y=231)
+        draw_icon_clock(&mut self.buf, 2, 223);
+        let up = st.uptime_secs
+            .map(|s| format!("Up {}", short_uptime(s)))
+            .unwrap_or_else(|| "Up —".into());
+        xbold(&mut self.buf, &up, 22, 223, data_s);
 
         self.flush()
     }

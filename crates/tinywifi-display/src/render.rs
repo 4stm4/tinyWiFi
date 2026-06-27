@@ -15,14 +15,14 @@ pub struct ConsoleRenderer;
 impl Renderer for ConsoleRenderer {
     fn render(&mut self, s: &DisplayStatus) -> io::Result<()> {
         let ram = s.ram_used_percent.map(|p| format!("{p}%")).unwrap_or_else(|| "—".into());
+        let cpu = s.cpu_used_percent.map(|p| format!("{p}%")).unwrap_or_else(|| "—".into());
         let up  = s.uptime_secs.map(short_uptime).unwrap_or_else(|| "—".into());
         println!(
-            "TinyWifi | SSID: {} | IP: {} | Clients: {} | WAN: {} | RAM: {} | Up: {}",
-            s.ssid.as_deref().unwrap_or("—"),
+            "TinyWifi | IP: {} | Clients: {} | WAN: {} | RAM: {} | CPU: {} | Up: {}",
             s.ip.map(|a| a.to_string()).as_deref().unwrap_or("—"),
             s.clients,
             if s.wan { "OK" } else { "NO" },
-            ram, up,
+            ram, cpu, up,
         );
         Ok(())
     }
