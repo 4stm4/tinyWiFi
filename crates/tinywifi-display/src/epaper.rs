@@ -228,6 +228,15 @@ impl EpaperRenderer {
     }
 }
 
+// Draw text three times with 1-px offsets to simulate extra-bold strokes.
+fn xbold(buf: &mut Buf, text: &str, x: i32, y: i32, style: MonoTextStyle<BinaryColor>) {
+    for (dx, dy) in [(0, 0), (1, 0), (0, 1)] {
+        Text::with_baseline(text, Point::new(x + dx, y + dy), style, Baseline::Top)
+            .draw(buf)
+            .ok();
+    }
+}
+
 impl Renderer for EpaperRenderer {
     fn is_available(&self) -> bool {
         Path::new("/dev/spidev0.0").exists()
@@ -245,10 +254,10 @@ impl Renderer for EpaperRenderer {
         Rectangle::new(Point::new(0, 0), Size::new(W, 30))
             .into_styled(fill)
             .draw(&mut self.buf).ok();
-        Text::with_baseline("TinyWifi", Point::new(3, 5), title_s, Baseline::Top)
-            .draw(&mut self.buf).ok();
+        // Title also gets the xbold treatment (white-on-black, so Off color)
+        let title_xb = MonoTextStyle::new(&FONT_10X20, BinaryColor::Off);
+        xbold(&mut self.buf, "TinyWifi", 3, 5, title_xb);
 
-        // Pre-compute all strings
         let ip      = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
         let ssid    = st.ssid.clone().unwrap_or_else(|| "—".into());
         let clients = format!("{} clients", st.clients);
@@ -256,8 +265,6 @@ impl Renderer for EpaperRenderer {
         let ram     = st.ram_used_percent.map(|p| format!("RAM {p}%")).unwrap_or_else(|| "RAM —".into());
         let up      = st.uptime_secs.map(|s| format!("Up  {}", short_uptime(s))).unwrap_or_else(|| "Up —".into());
 
-        // 6 rows spread to fill ~90% of 250px display height.
-        // Rows at y=34,68 | sep y=96 | rows y=104,138 | sep y=166 | rows y=174,208
         for (y, text) in [
             (34,  ip.as_str()),
             (68,  ssid.as_str()),
@@ -266,11 +273,9 @@ impl Renderer for EpaperRenderer {
             (174, ram.as_str()),
             (208, up.as_str()),
         ] {
-            Text::with_baseline(text, Point::new(3, y), bold, Baseline::Top)
-                .draw(&mut self.buf).ok();
+            xbold(&mut self.buf, text, 3, y, bold);
         }
 
-        // Section separators
         for y in [96_i32, 166] {
             Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
                 .into_styled(stroke)
