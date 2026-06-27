@@ -42,6 +42,7 @@ fn short_uptime(secs: u64) -> String {
 }
 
 /// Format the status into the lines shown on screen.
+/// Lines starting with "---" are rendered as horizontal separators by EpaperRenderer.
 pub fn format_frame(status: &DisplayStatus) -> String {
     let ram = status
         .ram_used_percent
@@ -53,16 +54,21 @@ pub fn format_frame(status: &DisplayStatus) -> String {
         .unwrap_or_else(|| "—".to_string());
     format!(
         "TinyWifi\n\
-         SSID: {}\n\
-         IP:   {}\n\
-         Clients: {}   WAN: {}\n\
-         RAM: {}   Up: {}",
-        opt(status.ssid.clone()),
-        opt(status.ip.map(|a| a.to_string())),
-        status.clients,
-        if status.wan { "OK" } else { "NO" },
-        ram,
-        up,
+         ---\n\
+         SSID: {ssid}\n\
+         IP:   {ip}\n\
+         ---\n\
+         Clients: {clients}\n\
+         WAN:     {wan}\n\
+         ---\n\
+         RAM: {ram}\n\
+         Up:  {up}",
+        ssid = opt(status.ssid.clone()),
+        ip = opt(status.ip.map(|a| a.to_string())),
+        clients = status.clients,
+        wan = if status.wan { "OK" } else { "NO" },
+        ram = ram,
+        up = up,
     )
 }
 
@@ -84,9 +90,10 @@ mod tests {
         let frame = format_frame(&s);
         assert!(frame.contains("SSID: MyNet"));
         assert!(frame.contains("IP:   192.168.44.1"));
-        assert!(frame.contains("Clients: 3   WAN: OK"));
+        assert!(frame.contains("Clients: 3"));
+        assert!(frame.contains("WAN:     OK"));
         assert!(frame.contains("RAM: 30%"));
-        assert!(frame.contains("Up: 1d 1h"));
+        assert!(frame.contains("Up:  1d 1h"));
     }
 
     #[test]
@@ -102,7 +109,7 @@ mod tests {
         let frame = format_frame(&s);
         assert!(frame.contains("SSID: —"));
         assert!(frame.contains("IP:   —"));
-        assert!(frame.contains("WAN: NO"));
+        assert!(frame.contains("WAN:     NO"));
         assert!(frame.contains("RAM: —"));
         assert!(frame.contains("Up: —"));
     }

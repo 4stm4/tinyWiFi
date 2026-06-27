@@ -14,9 +14,10 @@ use std::thread;
 use std::time::Duration;
 
 use embedded_graphics::{
-    mono_font::{ascii::FONT_6X10, MonoTextStyle},
+    mono_font::{ascii::{FONT_7X13, FONT_9X18_BOLD}, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::*,
+    primitives::{Line, PrimitiveStyle, Rectangle},
     text::{Baseline, Text},
 };
 use spidev::{SpiModeFlags, Spidev, SpidevOptions};
@@ -226,6 +227,9 @@ impl EpaperRenderer {
     }
 }
 
+// Title bar height in pixels.
+const TITLE_H: u32 = 24;
+
 impl Renderer for EpaperRenderer {
     fn is_available(&self) -> bool {
         Path::new("/dev/spidev0.0").exists()
@@ -234,13 +238,40 @@ impl Renderer for EpaperRenderer {
     fn render(&mut self, frame: &str) -> io::Result<()> {
         self.buf.clear();
 
-        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-        let mut y = 2i32;
-        for line in frame.lines() {
-            Text::with_baseline(line, Point::new(2, y), style, Baseline::Top)
-                .draw(&mut self.buf)
-                .ok();
-            y += 12;
+        let stroke  = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+        let fill    = PrimitiveStyle::with_fill(BinaryColor::On);
+        let title_s = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::Off); // white on black
+        let data_s  = MonoTextStyle::new(&FONT_7X13, BinaryColor::On);
+
+        let mut lines = frame.lines();
+
+        // ── Inverted title bar ─────────────────────────────────────────────
+        Rectangle::new(Point::new(0, 0), Size::new(W, TITLE_H))
+            .into_styled(fill)
+            .draw(&mut self.buf)
+            .ok();
+        let title = lines.next().unwrap_or("TinyWifi");
+        Text::with_baseline(title, Point::new(3, 3), title_s, Baseline::Top)
+            .draw(&mut self.buf)
+            .ok();
+
+        // ── Data lines ─────────────────────────────────────────────────────
+        let mut y = TITLE_H as i32 + 4;
+        for line in lines {
+            if line.starts_with("---") {
+                // horizontal separator with 3px margin
+                y += 2;
+                Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
+                    .into_styled(stroke)
+                    .draw(&mut self.buf)
+                    .ok();
+                y += 5;
+            } else {
+                Text::with_baseline(line, Point::new(3, y), data_s, Baseline::Top)
+                    .draw(&mut self.buf)
+                    .ok();
+                y += 17; // FONT_7X13 (13px) + 4px gap
+            }
         }
 
         self.flush()
