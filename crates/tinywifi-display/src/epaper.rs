@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_7X13, FONT_9X18_BOLD}, MonoTextStyle},
+    mono_font::{ascii::{FONT_9X18, FONT_10X20}, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Line, PrimitiveStyle, Rectangle},
@@ -22,7 +22,8 @@ use embedded_graphics::{
 };
 use spidev::{SpiModeFlags, Spidev, SpidevOptions};
 
-use crate::render::Renderer;
+use crate::render::{short_uptime, Renderer};
+use crate::status::DisplayStatus;
 
 // Native portrait dimensions: 128 × 250 (122 visible columns, 250 rows)
 const W: u32 = 128;
@@ -227,52 +228,64 @@ impl EpaperRenderer {
     }
 }
 
-// Title bar height in pixels.
-const TITLE_H: u32 = 24;
+const TITLE_H: u32 = 26;
+const LINE_H:  i32 = 22; // FONT_9X18 (18px) + 4px gap
+
+fn sep(buf: &mut Buf, y: i32) {
+    Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
+        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .draw(buf)
+        .ok();
+}
+
+fn row(buf: &mut Buf, y: i32, text: &str) {
+    let s = MonoTextStyle::new(&FONT_9X18, BinaryColor::On);
+    Text::with_baseline(text, Point::new(3, y), s, Baseline::Top)
+        .draw(buf)
+        .ok();
+}
 
 impl Renderer for EpaperRenderer {
     fn is_available(&self) -> bool {
         Path::new("/dev/spidev0.0").exists()
     }
 
-    fn render(&mut self, frame: &str) -> io::Result<()> {
+    fn render(&mut self, st: &DisplayStatus) -> io::Result<()> {
         self.buf.clear();
 
-        let stroke  = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
-        let fill    = PrimitiveStyle::with_fill(BinaryColor::On);
-        let title_s = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::Off); // white on black
-        let data_s  = MonoTextStyle::new(&FONT_7X13, BinaryColor::On);
-
-        let mut lines = frame.lines();
-
-        // ── Inverted title bar ─────────────────────────────────────────────
+        // ── Inverted title bar ──────────────────────────────────────────────
         Rectangle::new(Point::new(0, 0), Size::new(W, TITLE_H))
-            .into_styled(fill)
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
             .draw(&mut self.buf)
             .ok();
-        let title = lines.next().unwrap_or("TinyWifi");
-        Text::with_baseline(title, Point::new(3, 3), title_s, Baseline::Top)
-            .draw(&mut self.buf)
-            .ok();
+        Text::with_baseline(
+            "TinyWifi",
+            Point::new(3, 4),
+            MonoTextStyle::new(&FONT_10X20, BinaryColor::Off),
+            Baseline::Top,
+        )
+        .draw(&mut self.buf)
+        .ok();
 
-        // ── Data lines ─────────────────────────────────────────────────────
+        // ── IP and SSID (large, no labels) ─────────────────────────────────
+        let ip   = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
+        let ssid = st.ssid.clone().unwrap_or_else(|| "—".into());
         let mut y = TITLE_H as i32 + 4;
-        for line in lines {
-            if line.starts_with("---") {
-                // horizontal separator with 3px margin
-                y += 2;
-                Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
-                    .into_styled(stroke)
-                    .draw(&mut self.buf)
-                    .ok();
-                y += 5;
-            } else {
-                Text::with_baseline(line, Point::new(3, y), data_s, Baseline::Top)
-                    .draw(&mut self.buf)
-                    .ok();
-                y += 17; // FONT_7X13 (13px) + 4px gap
-            }
-        }
+        row(&mut self.buf, y, &ip);   y += LINE_H;
+        row(&mut self.buf, y, &ssid); y += LINE_H + 2;
+
+        // ── Clients / WAN ──────────────────────────────────────────────────
+        sep(&mut self.buf, y); y += 7;
+        let wan = if st.wan { "WAN: OK" } else { "WAN: NO" };
+        row(&mut self.buf, y, &format!("{} clients", st.clients)); y += LINE_H;
+        row(&mut self.buf, y, wan); y += LINE_H + 2;
+
+        // ── RAM / uptime ───────────────────────────────────────────────────
+        sep(&mut self.buf, y); y += 7;
+        let ram = st.ram_used_percent.map(|p| format!("RAM {p}%")).unwrap_or_else(|| "RAM —".into());
+        let up  = st.uptime_secs.map(|s| format!("Up  {}", short_uptime(s))).unwrap_or_else(|| "Up —".into());
+        row(&mut self.buf, y, &ram); y += LINE_H;
+        row(&mut self.buf, y, &up);
 
         self.flush()
     }

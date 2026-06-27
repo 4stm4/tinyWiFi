@@ -8,7 +8,7 @@ use std::time::Duration;
 use tinywifi_core::config::{self, DisplayConfig, Paths, Services, TinywifiConfig, WebConfig};
 
 use crate::epaper::EpaperRenderer;
-use crate::render::{format_frame, ConsoleRenderer, Renderer};
+use crate::render::{ConsoleRenderer, Renderer};
 use crate::status::DisplayStatus;
 
 fn config_path() -> String {
@@ -68,7 +68,7 @@ fn main() {
     loop {
         if renderer.is_available() {
             let status = DisplayStatus::collect(&config);
-            if let Err(e) = renderer.render(&format_frame(&status)) {
+            if let Err(e) = renderer.render(&status) {
                 eprintln!("tinywifi-display: render error: {e}");
             }
         } else {
