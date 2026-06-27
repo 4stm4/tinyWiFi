@@ -3,7 +3,7 @@ mod render;
 mod status;
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tinywifi_core::config::{self, DisplayConfig, Paths, Services, TinywifiConfig, WebConfig};
 
@@ -65,12 +65,30 @@ fn main() {
         }
     };
 
+    const UPTIME_ONLY_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+    let mut prev: Option<DisplayStatus> = None;
+    let mut last_render = Instant::now().checked_sub(UPTIME_ONLY_INTERVAL).unwrap_or(Instant::now());
+
     loop {
         if renderer.is_available() {
             let status = DisplayStatus::collect(&config);
-            if let Err(e) = renderer.render(&status) {
-                eprintln!("tinywifi-display: render error: {e}");
+
+            let should_render = match &prev {
+                None => true,
+                Some(p) if !p.eq_except_uptime(&status) => true,
+                _ => last_render.elapsed() >= UPTIME_ONLY_INTERVAL,
+            };
+
+            if should_render {
+                if let Err(e) = renderer.render(&status) {
+                    eprintln!("tinywifi-display: render error: {e}");
+                } else {
+                    last_render = Instant::now();
+                }
             }
+
+            prev = Some(status);
         } else {
             eprintln!("tinywifi-display: screen unavailable, skipping frame");
         }

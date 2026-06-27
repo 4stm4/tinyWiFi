@@ -19,6 +19,15 @@ pub struct DisplayStatus {
 }
 
 impl DisplayStatus {
+    /// Returns true when all fields except `uptime_secs` are equal.
+    pub fn eq_except_uptime(&self, other: &Self) -> bool {
+        self.ssid == other.ssid
+            && self.ip == other.ip
+            && self.clients == other.clients
+            && self.wan == other.wan
+            && self.ram_used_percent == other.ram_used_percent
+    }
+
     /// Gather a fresh snapshot via core's guarded readers.
     pub fn collect(config: &TinywifiConfig) -> Self {
         let iface = HostapdConf::from_path(&config.paths.hostapd_conf)
