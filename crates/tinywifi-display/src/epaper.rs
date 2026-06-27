@@ -230,7 +230,7 @@ impl EpaperRenderer {
 
 // Draw text three times with 1-px offsets to simulate extra-bold strokes.
 fn xbold(buf: &mut Buf, text: &str, x: i32, y: i32, style: MonoTextStyle<BinaryColor>) {
-    for (dx, dy) in [(0, 0), (1, 0), (0, 1)] {
+    for (dx, dy) in [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)] {
         Text::with_baseline(text, Point::new(x + dx, y + dy), style, Baseline::Top)
             .draw(buf)
             .ok();
