@@ -1,3 +1,4 @@
+mod epaper;
 mod render;
 mod status;
 
@@ -6,6 +7,7 @@ use std::time::Duration;
 
 use tinywifi_core::config::{self, DisplayConfig, Paths, Services, TinywifiConfig, WebConfig};
 
+use crate::epaper::EpaperRenderer;
 use crate::render::{format_frame, ConsoleRenderer, Renderer};
 use crate::status::DisplayStatus;
 
@@ -51,8 +53,17 @@ fn main() {
     });
 
     let interval = Duration::from_secs(config.display.refresh_secs.max(1));
-    let mut renderer = ConsoleRenderer;
-    println!("tinywifi-display {} starting", tinywifi_core::VERSION);
+
+    let mut renderer: Box<dyn Renderer> = match EpaperRenderer::open() {
+        Ok(r) => {
+            println!("tinywifi-display {}: Waveshare 2.13\" e-paper ready", tinywifi_core::VERSION);
+            Box::new(r)
+        }
+        Err(e) => {
+            eprintln!("tinywifi-display {}: e-paper unavailable ({e}), using console", tinywifi_core::VERSION);
+            Box::new(ConsoleRenderer)
+        }
+    };
 
     loop {
         if renderer.is_available() {
