@@ -6,8 +6,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-tinywifi-core = { workspace = true }
-rppal         = "0.14"
-epd-waveshare = { version = "0.5", features = ["epd2in13_v2", "graphics"] }
-embedded-graphics = "0.7"
-embedded-hal  = "0.2"
+tinywifi-core     = { workspace = true }
+spidev            = "0.5"
+embedded-graphics = "0.8"
