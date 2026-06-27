@@ -29,16 +29,47 @@ const H: u32 = 250;
 const ROW: usize = (W / 8) as usize; // 16 bytes per row
 const BUF: usize = ROW * H as usize;  // 4000 bytes total
 
-const PIN_RST:  u32 = 17;
-const PIN_DC:   u32 = 25;
-const PIN_BUSY: u32 = 24;
+// BCM GPIO numbers (hardware pin numbers per Raspberry Pi schematic)
+const BCM_RST:  u32 = 17;
+const BCM_DC:   u32 = 25;
+const BCM_BUSY: u32 = 24;
 
 // ── Sysfs GPIO ────────────────────────────────────────────────────────────────
+
+// On Linux 5.x+ kernels the GPIO controller base is no longer guaranteed to be
+// 0.  Pi kernel 6.x uses 512 (gpiochip512), so BCM pin N → sysfs pin 512+N.
+// Read the base at runtime from /sys/class/gpio/gpiochip*/base.
+fn gpio_base() -> u32 {
+    let Ok(entries) = fs::read_dir("/sys/class/gpio") else { return 0 };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let s = name.to_string_lossy();
+        if s.starts_with("gpiochip") {
+            let base_path = entry.path().join("base");
+            if let Ok(v) = fs::read_to_string(&base_path) {
+                if let Ok(n) = v.trim().parse::<u32>() {
+                    // The chip that owns BCM GPIO 0-53 will have the highest base
+                    // among chips with ngpio>=54; take the first match with ngpio>=54.
+                    let ngpio_path = entry.path().join("ngpio");
+                    if let Ok(ng) = fs::read_to_string(&ngpio_path) {
+                        if let Ok(ng) = ng.trim().parse::<u32>() {
+                            if ng >= 28 {
+                                return n;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    0
+}
 
 struct Pin(u32);
 
 impl Pin {
-    fn open(n: u32, dir: &str) -> io::Result<Self> {
+    fn open(bcm: u32, dir: &str) -> io::Result<Self> {
+        let n = gpio_base() + bcm;
         let path = format!("/sys/class/gpio/gpio{n}");
         if !Path::new(&path).exists() {
             let _ = fs::write("/sys/class/gpio/export", n.to_string());
@@ -130,9 +161,9 @@ impl EpaperRenderer {
                 .build(),
         )?;
 
-        let rst  = Pin::open(PIN_RST, "out")?;
-        let dc   = Pin::open(PIN_DC, "out")?;
-        let busy = Pin::open(PIN_BUSY, "in")?;
+        let rst  = Pin::open(BCM_RST, "out")?;
+        let dc   = Pin::open(BCM_DC, "out")?;
+        let busy = Pin::open(BCM_BUSY, "in")?;
 
         let mut r = Self { spi, rst, dc, busy, buf: Buf::new() };
         r.init()?;
