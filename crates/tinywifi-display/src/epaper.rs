@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_9X18, FONT_10X20}, MonoTextStyle},
+    mono_font::{ascii::{FONT_9X18_BOLD, FONT_10X20}, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Line, PrimitiveStyle, Rectangle},
@@ -228,23 +228,6 @@ impl EpaperRenderer {
     }
 }
 
-const TITLE_H: u32 = 26;
-const LINE_H:  i32 = 22; // FONT_9X18 (18px) + 4px gap
-
-fn sep(buf: &mut Buf, y: i32) {
-    Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
-        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
-        .draw(buf)
-        .ok();
-}
-
-fn row(buf: &mut Buf, y: i32, text: &str) {
-    let s = MonoTextStyle::new(&FONT_9X18, BinaryColor::On);
-    Text::with_baseline(text, Point::new(3, y), s, Baseline::Top)
-        .draw(buf)
-        .ok();
-}
-
 impl Renderer for EpaperRenderer {
     fn is_available(&self) -> bool {
         Path::new("/dev/spidev0.0").exists()
@@ -253,39 +236,46 @@ impl Renderer for EpaperRenderer {
     fn render(&mut self, st: &DisplayStatus) -> io::Result<()> {
         self.buf.clear();
 
-        // ── Inverted title bar ──────────────────────────────────────────────
-        Rectangle::new(Point::new(0, 0), Size::new(W, TITLE_H))
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-            .draw(&mut self.buf)
-            .ok();
-        Text::with_baseline(
-            "TinyWifi",
-            Point::new(3, 4),
-            MonoTextStyle::new(&FONT_10X20, BinaryColor::Off),
-            Baseline::Top,
-        )
-        .draw(&mut self.buf)
-        .ok();
+        let title_s = MonoTextStyle::new(&FONT_10X20, BinaryColor::Off);
+        let bold    = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
+        let fill    = PrimitiveStyle::with_fill(BinaryColor::On);
+        let stroke  = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
 
-        // ── IP and SSID (large, no labels) ─────────────────────────────────
-        let ip   = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
-        let ssid = st.ssid.clone().unwrap_or_else(|| "—".into());
-        let mut y = TITLE_H as i32 + 4;
-        row(&mut self.buf, y, &ip);   y += LINE_H;
-        row(&mut self.buf, y, &ssid); y += LINE_H + 2;
+        // Inverted title bar (30px)
+        Rectangle::new(Point::new(0, 0), Size::new(W, 30))
+            .into_styled(fill)
+            .draw(&mut self.buf).ok();
+        Text::with_baseline("TinyWifi", Point::new(3, 5), title_s, Baseline::Top)
+            .draw(&mut self.buf).ok();
 
-        // ── Clients / WAN ──────────────────────────────────────────────────
-        sep(&mut self.buf, y); y += 7;
-        let wan = if st.wan { "WAN: OK" } else { "WAN: NO" };
-        row(&mut self.buf, y, &format!("{} clients", st.clients)); y += LINE_H;
-        row(&mut self.buf, y, wan); y += LINE_H + 2;
+        // Pre-compute all strings
+        let ip      = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
+        let ssid    = st.ssid.clone().unwrap_or_else(|| "—".into());
+        let clients = format!("{} clients", st.clients);
+        let wan     = if st.wan { "WAN: OK" } else { "WAN: NO" };
+        let ram     = st.ram_used_percent.map(|p| format!("RAM {p}%")).unwrap_or_else(|| "RAM —".into());
+        let up      = st.uptime_secs.map(|s| format!("Up  {}", short_uptime(s))).unwrap_or_else(|| "Up —".into());
 
-        // ── RAM / uptime ───────────────────────────────────────────────────
-        sep(&mut self.buf, y); y += 7;
-        let ram = st.ram_used_percent.map(|p| format!("RAM {p}%")).unwrap_or_else(|| "RAM —".into());
-        let up  = st.uptime_secs.map(|s| format!("Up  {}", short_uptime(s))).unwrap_or_else(|| "Up —".into());
-        row(&mut self.buf, y, &ram); y += LINE_H;
-        row(&mut self.buf, y, &up);
+        // 6 rows spread to fill ~90% of 250px display height.
+        // Rows at y=34,68 | sep y=96 | rows y=104,138 | sep y=166 | rows y=174,208
+        for (y, text) in [
+            (34,  ip.as_str()),
+            (68,  ssid.as_str()),
+            (104, clients.as_str()),
+            (138, wan),
+            (174, ram.as_str()),
+            (208, up.as_str()),
+        ] {
+            Text::with_baseline(text, Point::new(3, y), bold, Baseline::Top)
+                .draw(&mut self.buf).ok();
+        }
+
+        // Section separators
+        for y in [96_i32, 166] {
+            Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
+                .into_styled(stroke)
+                .draw(&mut self.buf).ok();
+        }
 
         self.flush()
     }
