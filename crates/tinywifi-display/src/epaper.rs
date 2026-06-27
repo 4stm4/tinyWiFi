@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use embedded_graphics::{
-    mono_font::{ascii::{FONT_9X18_BOLD, FONT_10X20}, MonoTextStyle},
+    mono_font::{ascii::{FONT_7X13_BOLD, FONT_9X18_BOLD, FONT_10X20}, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::{Line, PrimitiveStyle, Rectangle},
@@ -245,38 +245,50 @@ impl Renderer for EpaperRenderer {
     fn render(&mut self, st: &DisplayStatus) -> io::Result<()> {
         self.buf.clear();
 
-        let title_s = MonoTextStyle::new(&FONT_10X20, BinaryColor::Off);
-        let bold    = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-        let fill    = PrimitiveStyle::with_fill(BinaryColor::On);
-        let stroke  = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
+        let fill   = PrimitiveStyle::with_fill(BinaryColor::On);
+        let stroke = PrimitiveStyle::with_stroke(BinaryColor::On, 1);
 
-        // Inverted title bar (30px)
-        Rectangle::new(Point::new(0, 0), Size::new(W, 30))
+        // ── Title bar: "4STM4" + "TinyWifi" white on black (44px) ──────────
+        Rectangle::new(Point::new(0, 0), Size::new(W, 44))
             .into_styled(fill)
             .draw(&mut self.buf).ok();
-        // Title also gets the xbold treatment (white-on-black, so Off color)
-        let title_xb = MonoTextStyle::new(&FONT_10X20, BinaryColor::Off);
-        xbold(&mut self.buf, "TinyWifi", 3, 5, title_xb);
 
+        // character_spacing lives on MonoFont, not on MonoTextStyle — copy the
+        // static font struct and set the field before borrowing it.
+        let mut f_brand = FONT_7X13_BOLD;  f_brand.character_spacing = 4;
+        let mut f_title = FONT_10X20;      f_title.character_spacing = 2;
+        let mut f_data  = FONT_9X18_BOLD;  f_data.character_spacing  = 2;
+
+        // "4STM4" — brand label, small, spaced out
+        xbold(&mut self.buf, "4STM4",    4, 2,  MonoTextStyle::new(&f_brand, BinaryColor::Off));
+        // "TinyWifi" — product name
+        xbold(&mut self.buf, "TinyWifi", 3, 18, MonoTextStyle::new(&f_title, BinaryColor::Off));
+
+        // ── Data styles ────────────────────────────────────────────────────
+        // IP needs 0 extra spacing (13 chars × 9px = 117px, barely fits at 122px).
+        let ip_s   = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
+        let data_s = MonoTextStyle::new(&f_data, BinaryColor::On);
+
+        // ── Data rows: IP | sep | Clients, WAN | sep | RAM, Up ─────────────
         let ip      = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
-        let ssid    = st.ssid.clone().unwrap_or_else(|| "—".into());
         let clients = format!("{} clients", st.clients);
         let wan     = if st.wan { "WAN: OK" } else { "WAN: NO" };
         let ram     = st.ram_used_percent.map(|p| format!("RAM {p}%")).unwrap_or_else(|| "RAM —".into());
         let up      = st.uptime_secs.map(|s| format!("Up  {}", short_uptime(s))).unwrap_or_else(|| "Up —".into());
 
+        xbold(&mut self.buf, &ip, 3, 48, ip_s);
+
         for (y, text) in [
-            (34,  ip.as_str()),
-            (68,  ssid.as_str()),
-            (104, clients.as_str()),
-            (138, wan),
-            (174, ram.as_str()),
-            (208, up.as_str()),
+            (84,  clients.as_str()),
+            (122, wan),
+            (160, ram.as_str()),
+            (198, up.as_str()),
         ] {
-            xbold(&mut self.buf, text, 3, y, bold);
+            xbold(&mut self.buf, text, 3, y, data_s);
         }
 
-        for y in [96_i32, 166] {
+        // Section separators
+        for y in [74_i32, 148] {
             Line::new(Point::new(2, y), Point::new(W as i32 - 3, y))
                 .into_styled(stroke)
                 .draw(&mut self.buf).ok();
