@@ -221,7 +221,7 @@ impl EpaperRenderer {
     fn flush(&mut self) -> io::Result<()> {
         self.cmd(0x4E)?; self.dat(&[0x00])?;
         self.cmd(0x4F)?; self.dat(&[0x00, 0x00])?;
-        self.cmd(0x24)?;
+        self.cmd(0x24)?;        // Write RAM A (new frame)
         let data = self.buf.0;
         self.dat(&data)?;
         self.cmd(0x22)?; self.dat(&[0xF7])?; // full update sequence
@@ -254,8 +254,8 @@ fn sep(buf: &mut Buf, y: i32) {
 /// - thick arc from 12 o'clock clockwise for `pct`%
 /// - label ("RAM"/"CPU") and percentage centered inside
 fn draw_gauge(buf: &mut Buf, cx: i32, cy: i32, r: u32, pct: u8, label: &str) {
-    let thin = PrimitiveStyle::with_stroke(BinaryColor::On, 2);
-    let thick = PrimitiveStyle::with_stroke(BinaryColor::On, 4);
+    let thin = PrimitiveStyle::with_stroke(BinaryColor::Off, 2);
+    let thick = PrimitiveStyle::with_stroke(BinaryColor::Off, 6);
 
     // Background circle
     Circle::with_center(Point::new(cx, cy), r * 2)
@@ -281,7 +281,7 @@ fn draw_gauge(buf: &mut Buf, cx: i32, cy: i32, r: u32, pct: u8, label: &str) {
     // Label ("RAM" / "CPU") — FONT_6X10, centered above middle
     let f_label = FONT_6X10;
     let lw = label.len() as i32 * f_label.character_size.width as i32;
-    let label_style = MonoTextStyle::new(&f_label, BinaryColor::On);
+    let label_style = MonoTextStyle::new(&f_label, BinaryColor::Off);
     Text::with_baseline(
         label,
         Point::new(cx - lw / 2, cy - 12),
@@ -294,7 +294,7 @@ fn draw_gauge(buf: &mut Buf, cx: i32, cy: i32, r: u32, pct: u8, label: &str) {
     // Percentage — FONT_7X13_BOLD, centered below label
     let pct_str = format!("{pct}%");
     let pw = pct_str.len() as i32 * FONT_7X13_BOLD.character_size.width as i32;
-    let pct_style = MonoTextStyle::new(&FONT_7X13_BOLD, BinaryColor::On);
+    let pct_style = MonoTextStyle::new(&FONT_7X13_BOLD, BinaryColor::Off);
     Text::with_baseline(
         &pct_str,
         Point::new(cx - pw / 2, cy),
@@ -358,63 +358,126 @@ impl Renderer for EpaperRenderer {
     }
 
     fn render(&mut self, st: &DisplayStatus) -> io::Result<()> {
-        self.buf.clear();
-
-        let fill = PrimitiveStyle::with_fill(BinaryColor::On);
-
-        // ── Title bar (0-44): white text on black ──────────────────────────
-        Rectangle::new(Point::new(0, 0), Size::new(W, 44))
-            .into_styled(fill)
-            .draw(&mut self.buf).ok();
-
-        let mut f_brand = FONT_7X13_BOLD;  f_brand.character_spacing = 4;
-        let mut f_title = FONT_10X20;      f_title.character_spacing = 2;
-
-        xbold(&mut self.buf, "4STM4",    4, 2,  MonoTextStyle::new(&f_brand, BinaryColor::Off));
-        xbold(&mut self.buf, "TinyWifi", 3, 18, MonoTextStyle::new(&f_title, BinaryColor::Off));
-
-        sep(&mut self.buf, 44);
-
-        // ── IP row (45-72) ─────────────────────────────────────────────────
-        let ip = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
-        xbold(&mut self.buf, &ip, 3, 48, MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On));
-
-        sep(&mut self.buf, 73);
-
-        // ── Circular gauges (74-147): RAM left, CPU right ──────────────────
-        // Gauge centers: left cx=32, right cx=92, cy=110, r=27
-        let ram = st.ram_used_percent.unwrap_or(0);
-        let cpu = st.cpu_used_percent.unwrap_or(0);
-        draw_gauge(&mut self.buf, 32,  110, 27, ram, "RAM");
-        draw_gauge(&mut self.buf, 92,  110, 27, cpu, "CPU");
-
-        sep(&mut self.buf, 148);
-
-        // ── Icon rows ──────────────────────────────────────────────────────
-        let mut f_data = FONT_9X18_BOLD; f_data.character_spacing = 1;
-        let data_s = MonoTextStyle::new(&f_data, BinaryColor::On);
-
-        // clients (148-183, center y=165)
-        draw_icon_people(&mut self.buf, 2, 157);
-        let clients = format!("{} clients", st.clients);
-        xbold(&mut self.buf, &clients, 22, 157, data_s);
-
-        sep(&mut self.buf, 184);
-
-        // WAN (184-213, center y=199)
-        draw_icon_globe(&mut self.buf, 2, 191);
-        let wan = if st.wan { "WAN: OK" } else { "WAN: NO" };
-        xbold(&mut self.buf, wan, 22, 191, data_s);
-
-        sep(&mut self.buf, 214);
-
-        // uptime (214-249, center y=231)
-        draw_icon_clock(&mut self.buf, 2, 223);
-        let up = st.uptime_secs
-            .map(|s| format!("Up {}", short_uptime(s)))
-            .unwrap_or_else(|| "Up —".into());
-        xbold(&mut self.buf, &up, 22, 223, data_s);
-
+        draw_frame(&mut self.buf, st);
         self.flush()
+    }
+}
+
+/// Compose the full 128×250 frame into `buf`. Pure drawing, no hardware, so the
+/// exact same output can be unit-tested / previewed on the host.
+fn draw_frame(buf: &mut Buf, st: &DisplayStatus) {
+    buf.clear();
+
+    let fill = PrimitiveStyle::with_fill(BinaryColor::On);
+
+    // ── Title bar (0-44): white text on black ──────────────────────────
+    Rectangle::new(Point::new(0, 0), Size::new(W, 44))
+        .into_styled(fill)
+        .draw(buf).ok();
+
+    let mut f_brand = FONT_7X13_BOLD;  f_brand.character_spacing = 4;
+    let mut f_title = FONT_10X20;      f_title.character_spacing = 2;
+
+    xbold(buf, "4STM4",    4, 2,  MonoTextStyle::new(&f_brand, BinaryColor::Off));
+    xbold(buf, "TinyWifi", 3, 18, MonoTextStyle::new(&f_title, BinaryColor::Off));
+
+    sep(buf, 44);
+
+    // ── IP row (45-72) ─────────────────────────────────────────────────
+    let ip = st.ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
+    xbold(buf, &ip, 3, 48, MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On));
+
+    sep(buf, 73);
+
+    // ── Circular gauges (74-147): black background, white circles/text ─
+    Rectangle::new(Point::new(0, 74), Size::new(W, 74))
+        .into_styled(fill)
+        .draw(buf).ok();
+
+    let ram = st.ram_used_percent.unwrap_or(0);
+    let cpu = st.cpu_used_percent.unwrap_or(0);
+    draw_gauge(buf, 32,  110, 27, ram, "RAM");
+    draw_gauge(buf, 92,  110, 27, cpu, "CPU");
+
+    sep(buf, 148);
+
+    // ── Icon rows ──────────────────────────────────────────────────────
+    let mut f_data = FONT_9X18_BOLD; f_data.character_spacing = 1;
+    let data_s = MonoTextStyle::new(&f_data, BinaryColor::On);
+
+    // clients (148-183, center y=165)
+    draw_icon_people(buf, 2, 157);
+    let clients = format!("{} clients", st.clients);
+    xbold(buf, &clients, 22, 157, data_s);
+
+    sep(buf, 184);
+
+    // WAN (184-213, center y=199)
+    draw_icon_globe(buf, 2, 191);
+    let wan = if st.wan { "WAN: OK" } else { "WAN: NO" };
+    xbold(buf, wan, 22, 191, data_s);
+
+    sep(buf, 214);
+
+    // uptime (214-249, center y=231)
+    draw_icon_clock(buf, 2, 223);
+    let up = st.uptime_secs
+        .map(|s| format!("Up {}", short_uptime(s)))
+        .unwrap_or_else(|| "Up —".into());
+    xbold(buf, &up, 22, 223, data_s);
+}
+
+#[cfg(test)]
+mod preview {
+    //! Host-side preview: renders sample frames to PNGs so the e-paper layout
+    //! can be eyeballed without flashing the device.
+    //!   cargo test -p tinywifi-display preview -- --nocapture
+    use super::*;
+    use crate::status::DisplayStatus;
+    use std::net::Ipv4Addr;
+
+    fn sample(ram: u8, cpu: u8, clients: usize, wan: bool, up: u64) -> DisplayStatus {
+        DisplayStatus {
+            ssid: Some("4STM4-TinyWifi".into()),
+            ip: Some(Ipv4Addr::new(192, 168, 44, 1)),
+            clients,
+            wan,
+            ram_used_percent: Some(ram),
+            cpu_used_percent: Some(cpu),
+            uptime_secs: Some(up),
+        }
+    }
+
+    /// Dump the 1-bit framebuffer as an 8-bit binary PGM (no deps; buffer bit
+    /// 0 = black ink). Converted to PNG on the host for viewing.
+    fn save_pgm(buf: &Buf, path: &str) {
+        use std::io::Write;
+        let mut f = std::fs::File::create(path).expect("create pgm");
+        f.write_all(format!("P5\n{W} {H}\n255\n").as_bytes()).unwrap();
+        let mut px = Vec::with_capacity((W * H) as usize);
+        for y in 0..H {
+            for x in 0..W {
+                let byte = y as usize * ROW + x as usize / 8;
+                let bit = 7 - (x as usize % 8);
+                let black = (buf.0[byte] >> bit) & 1 == 0;
+                px.push(if black { 0u8 } else { 255u8 });
+            }
+        }
+        f.write_all(&px).unwrap();
+    }
+
+    #[test]
+    fn dump_preview() {
+        let cases = [
+            ("/tmp/epd_ram10_cpu24.pgm", sample(10, 24, 2, true, 2 * 3600 + 44 * 60)),
+            ("/tmp/epd_ram77_cpu55.pgm", sample(77, 55, 5, true, 5 * 86400 + 13 * 3600)),
+            ("/tmp/epd_full.pgm", sample(100, 100, 12, false, 9 * 60)),
+        ];
+        for (path, st) in &cases {
+            let mut buf = Buf::new();
+            draw_frame(&mut buf, st);
+            save_pgm(&buf, path);
+            println!("wrote {path}");
+        }
     }
 }
