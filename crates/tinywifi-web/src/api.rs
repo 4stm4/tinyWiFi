@@ -199,18 +199,24 @@ pub async fn service_restart_handler(
 }
 
 pub async fn reboot() -> Result<Json<Value>, ApiError> {
-    let out = std::process::Command::new("systemctl")
-        .arg("reboot")
-        .output()
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if out.status.success() {
-        Ok(ok())
-    } else {
-        Err(ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ))
+    // The reboot mechanism varies by host: systemd uses `systemctl reboot`,
+    // while the on-device busybox/SysV image has `/sbin/reboot`. Try the known
+    // mechanisms in order and succeed on the first that runs — a missing binary
+    // (ENOENT) falls through to the next instead of returning 500.
+    const CANDIDATES: &[(&str, &[&str])] = &[
+        ("systemctl", &["reboot"]),
+        ("/sbin/reboot", &[]),
+        ("reboot", &[]),
+    ];
+    let mut last_err = "no reboot mechanism available".to_string();
+    for &(prog, args) in CANDIDATES {
+        match std::process::Command::new(prog).args(args).output() {
+            Ok(out) if out.status.success() => return Ok(ok()),
+            Ok(out) => last_err = String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            Err(_) => continue, // not installed / not runnable — try the next
+        }
     }
+    Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, last_err))
 }
 
 #[derive(serde::Deserialize)]
