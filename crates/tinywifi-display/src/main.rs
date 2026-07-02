@@ -70,26 +70,46 @@ fn main() {
 
     let mut prev: Option<DisplayStatus> = None;
     let mut last_render = Instant::now().checked_sub(UPTIME_ONLY_INTERVAL).unwrap_or(Instant::now());
+    // Whether the first-boot password screen is currently on-screen, so it's
+    // drawn once (not on every tick) and the status frame resumes cleanly
+    // once the admin changes the password.
+    let mut showing_setup = false;
 
     loop {
         if renderer.is_available() {
             let status = DisplayStatus::collect(&config);
 
-            let should_render = match &prev {
-                None => true,
-                Some(p) if !p.eq_except_uptime(&status) => true,
-                _ => last_render.elapsed() >= UPTIME_ONLY_INTERVAL,
-            };
-
-            if should_render {
-                if let Err(e) = renderer.render(&status) {
-                    eprintln!("tinywifi-display: render error: {e}");
-                } else {
-                    last_render = Instant::now();
+            if let Some(password) = tinywifi_core::read_initial_password() {
+                if !showing_setup {
+                    if let Err(e) = renderer.render_setup(status.ip, &password) {
+                        eprintln!("tinywifi-display: render error: {e}");
+                    } else {
+                        showing_setup = true;
+                    }
                 }
-            }
+            } else {
+                if showing_setup {
+                    // Force a full redraw switching back from the setup screen.
+                    prev = None;
+                    showing_setup = false;
+                }
 
-            prev = Some(status);
+                let should_render = match &prev {
+                    None => true,
+                    Some(p) if !p.eq_except_uptime(&status) => true,
+                    _ => last_render.elapsed() >= UPTIME_ONLY_INTERVAL,
+                };
+
+                if should_render {
+                    if let Err(e) = renderer.render(&status) {
+                        eprintln!("tinywifi-display: render error: {e}");
+                    } else {
+                        last_render = Instant::now();
+                    }
+                }
+
+                prev = Some(status);
+            }
         } else {
             eprintln!("tinywifi-display: screen unavailable, skipping frame");
         }

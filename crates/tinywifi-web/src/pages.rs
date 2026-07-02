@@ -127,9 +127,9 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
         .join("");
     let default_pw_banner = if auth::is_default_password() {
         "<div class=\"alert alert--warn\">\
-         ⚠ <span class=\"t-ru\">Установлен пароль по умолчанию (<b>admin</b>). \
+         ⚠ <span class=\"t-ru\">Используется временный пароль, показанный на экране устройства. \
          <a href=\"/system\">Смените пароль</a> в разделе Система.</span>\
-         <span class=\"t-en\">Default password is active (<b>admin</b>). \
+         <span class=\"t-en\">Using the temporary password shown on the device's screen. \
          <a href=\"/system\">Change it</a> in System.</span>\
          </div>\n"
     } else {

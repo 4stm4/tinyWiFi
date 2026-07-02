@@ -1259,6 +1259,7 @@ dependencies = [
  "base64",
  "flate2",
  "parking_lot",
+ "rand",
  "serde",
  "serde_json",
  "tempfile",

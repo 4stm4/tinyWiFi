@@ -10,15 +10,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use argon2::password_hash::rand_core::{OsRng, RngCore};
-use parking_lot::Mutex;
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
+use parking_lot::Mutex;
 
 pub const SESSION_COOKIE: &str = "tw_sess";
 pub const AUTH_FILE: &str = "/etc/tinywifi/auth";
 /// Marker created on init, removed when the user changes the password.
 const DEFAULT_MARKER: &str = "/etc/tinywifi/auth.default";
-const DEFAULT_PASSWORD: &str = "admin";
 const SESSION_TTL: Duration = Duration::from_secs(86400);
 
 /// Brute-force protection: max failed attempts before IP is banned.
@@ -165,7 +164,7 @@ pub fn write_hash(hash: &str) -> std::io::Result<()> {
     std::fs::write(AUTH_FILE, format!("{hash}\n"))
 }
 
-/// True when the device is still running the default "admin" password.
+/// True when the device is still running the random first-boot password.
 pub fn is_default_password() -> bool {
     std::path::Path::new(DEFAULT_MARKER).exists()
 }
@@ -174,21 +173,27 @@ fn clear_default_marker() {
     let _ = std::fs::remove_file(DEFAULT_MARKER);
 }
 
-/// Called at server startup: creates AUTH_FILE with the default password hash
-/// if the file does not yet exist, and leaves a marker so the UI can warn.
+/// Called at server startup: on first boot, generates a random password,
+/// stores its hash in AUTH_FILE, and writes the plaintext to
+/// `tinywifi_core::INITIAL_PASSWORD_FILE` so the display daemon can show it
+/// until the admin changes it (leaves DEFAULT_MARKER so the UI can warn too).
 pub fn init() {
     if !std::path::Path::new(AUTH_FILE).exists() {
-        if let Ok(hash) = hash_password(DEFAULT_PASSWORD) {
+        let password = tinywifi_core::generate_initial_password();
+        if let Ok(hash) = hash_password(&password) {
             if write_hash(&hash).is_ok() {
                 let _ = std::fs::write(DEFAULT_MARKER, "");
+                let _ = tinywifi_core::write_initial_password(&password);
             }
         }
     }
 }
 
-/// Called after a successful password change; removes the default-password marker.
+/// Called after a successful password change; removes the default-password
+/// marker and the plaintext initial password (it must not linger on disk).
 pub fn on_password_changed() {
     clear_default_marker();
+    tinywifi_core::clear_initial_password();
 }
 
 /// Extract the session token from a `Cookie` request header.

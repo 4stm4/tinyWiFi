@@ -17,6 +17,7 @@ pub mod nanodhcp;
 pub mod nanodns;
 pub mod safety;
 pub mod service;
+pub mod setup;
 pub mod status;
 pub mod acl;
 pub mod monitor;
@@ -61,6 +62,10 @@ pub use adblock::{
     adblock_disable, adblock_enable, adblock_set_response, adblock_status,
     add_custom_block, count_domains, remove_custom_block, update_blocklist,
     AdblockStatus, BLOCKLIST_PATH,
+};
+pub use setup::{
+    clear_initial_password, generate_initial_password, read_initial_password,
+    write_initial_password, INITIAL_PASSWORD_FILE,
 };
 
 /// Crate version, surfaced in the dashboard and on the display.

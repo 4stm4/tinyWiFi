@@ -12,6 +12,7 @@ toml = { workspace = true }
 base64 = "0.22"
 flate2 = "1"
 parking_lot = "0.12.5"
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

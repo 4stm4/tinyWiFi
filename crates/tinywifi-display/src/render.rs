@@ -1,4 +1,5 @@
 use std::io;
+use std::net::Ipv4Addr;
 
 use crate::status::DisplayStatus;
 
@@ -8,6 +9,10 @@ pub trait Renderer {
     }
 
     fn render(&mut self, status: &DisplayStatus) -> io::Result<()>;
+
+    /// Shown instead of [`render`] while a first-boot password is pending
+    /// (i.e. the admin hasn't logged in and changed it yet).
+    fn render_setup(&mut self, ip: Option<Ipv4Addr>, password: &str) -> io::Result<()>;
 }
 
 pub struct ConsoleRenderer;
@@ -23,6 +28,14 @@ impl Renderer for ConsoleRenderer {
             s.clients,
             if s.wan { "OK" } else { "NO" },
             ram, cpu, up,
+        );
+        Ok(())
+    }
+
+    fn render_setup(&mut self, ip: Option<Ipv4Addr>, password: &str) -> io::Result<()> {
+        println!(
+            "TinyWifi SETUP | open https://{}/ | password: {password}",
+            ip.map(|a| a.to_string()).as_deref().unwrap_or("<device-ip>"),
         );
         Ok(())
     }

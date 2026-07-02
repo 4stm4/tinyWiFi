@@ -9,6 +9,7 @@
 
 use std::fs;
 use std::io::{self, Write};
+use std::net::Ipv4Addr;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -361,6 +362,11 @@ impl Renderer for EpaperRenderer {
         draw_frame(&mut self.buf, st);
         self.flush()
     }
+
+    fn render_setup(&mut self, ip: Option<Ipv4Addr>, password: &str) -> io::Result<()> {
+        draw_setup_frame(&mut self.buf, ip, password);
+        self.flush()
+    }
 }
 
 /// Compose the full 128×250 frame into `buf`. Pure drawing, no hardware, so the
@@ -427,6 +433,52 @@ fn draw_frame(buf: &mut Buf, st: &DisplayStatus) {
     xbold(buf, &up, 22, 223, data_s);
 }
 
+/// First-boot screen: shown instead of [`draw_frame`] while a random setup
+/// password is pending. Same title bar for brand consistency; the rest of
+/// the screen is dedicated to the password, since that's the one piece of
+/// information the admin has no other way to retrieve.
+fn draw_setup_frame(buf: &mut Buf, ip: Option<Ipv4Addr>, password: &str) {
+    buf.clear();
+
+    let fill = PrimitiveStyle::with_fill(BinaryColor::On);
+
+    // ── Title bar (0-44): white text on black, same as the status frame ─
+    Rectangle::new(Point::new(0, 0), Size::new(W, 44))
+        .into_styled(fill)
+        .draw(buf).ok();
+
+    let mut f_brand = FONT_7X13_BOLD;  f_brand.character_spacing = 4;
+    let mut f_title = FONT_10X20;      f_title.character_spacing = 2;
+
+    xbold(buf, "4STM4",    4, 2,  MonoTextStyle::new(&f_brand, BinaryColor::Off));
+    xbold(buf, "TinyWifi", 3, 18, MonoTextStyle::new(&f_title, BinaryColor::Off));
+
+    sep(buf, 44);
+
+    // ── Password (48-96): the one thing the admin can't get any other way ─
+    let label_s = MonoTextStyle::new(&FONT_7X13_BOLD, BinaryColor::On);
+    Text::with_baseline("New password:", Point::new(4, 48), label_s, Baseline::Top)
+        .draw(buf).ok();
+    xbold(buf, password, 4, 66, MonoTextStyle::new(&FONT_10X20, BinaryColor::On));
+
+    sep(buf, 96);
+
+    // ── Address (102-138) ─────────────────────────────────────────────
+    Text::with_baseline("Open in browser:", Point::new(4, 102), label_s, Baseline::Top)
+        .draw(buf).ok();
+    let addr = ip.map(|a| a.to_string()).unwrap_or_else(|| "—".into());
+    xbold(buf, &addr, 4, 120, MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On));
+
+    sep(buf, 148);
+
+    // ── Hint (156-190) ────────────────────────────────────────────────
+    let hint_s = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+    for (i, line) in ["Log in, then change", "the password in", "Settings."].iter().enumerate() {
+        Text::with_baseline(line, Point::new(4, 156 + i as i32 * 13), hint_s, Baseline::Top)
+            .draw(buf).ok();
+    }
+}
+
 #[cfg(test)]
 mod preview {
     //! Host-side preview: renders sample frames to PNGs so the e-paper layout
@@ -479,5 +531,13 @@ mod preview {
             save_pgm(&buf, path);
             println!("wrote {path}");
         }
+    }
+
+    #[test]
+    fn dump_setup_preview() {
+        let mut buf = Buf::new();
+        draw_setup_frame(&mut buf, Some(Ipv4Addr::new(192, 168, 44, 1)), "7hK9mPqR2x");
+        save_pgm(&buf, "/tmp/epd_setup.pgm");
+        println!("wrote /tmp/epd_setup.pgm");
     }
 }
