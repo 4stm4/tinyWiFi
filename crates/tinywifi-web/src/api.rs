@@ -95,6 +95,16 @@ fn confirm_pending(st: &AppState, key: &'static str, path: &std::path::Path) -> 
     }
 }
 
+/// Unauthenticated liveness check for external monitoring — deliberately
+/// does no disk/service I/O so it stays cheap and fast under any condition.
+pub async fn health() -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "version": tinywifi_core::VERSION,
+        "uptime_secs": tinywifi_core::uptime_secs(),
+    }))
+}
+
 pub async fn status(State(st): State<AppState>) -> Json<SystemStatus> {
     Json(SystemStatus::collect(
         &st.ap_interface(),

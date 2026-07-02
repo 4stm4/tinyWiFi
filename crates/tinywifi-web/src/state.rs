@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use tinywifi_core::{AutoRevert, HostapdConf, MonitorHandle, TinywifiConfig};
 
 use crate::auth;
+use crate::ratelimit;
 
 /// Armed auto-reverts awaiting confirmation, keyed by area (`"wifi"`,
 /// `"dhcp"`). Arming a new change for a key replaces (and cancels) the
@@ -19,6 +20,7 @@ pub struct AppState {
     pub sessions: auth::Sessions,
     pub login_attempts: auth::LoginAttempts,
     pub monitor: MonitorHandle,
+    pub rate_limiter: ratelimit::RateLimiter,
 }
 
 impl AppState {
@@ -29,6 +31,7 @@ impl AppState {
             sessions: auth::new_sessions(),
             login_attempts: auth::new_login_attempts(),
             monitor: MonitorHandle::new(),
+            rate_limiter: ratelimit::new_rate_limiter(),
         }
     }
 

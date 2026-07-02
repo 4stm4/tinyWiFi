@@ -2,6 +2,7 @@ mod api;
 mod assets;
 mod auth;
 mod pages;
+mod ratelimit;
 mod state;
 mod tls;
 
@@ -49,9 +50,32 @@ async fn require_auth(
     Redirect::to("/login").into_response()
 }
 
+/// Middleware: rejects with 429 once an IP exceeds its request budget.
+/// Applies to the whole app, on top of login's own brute-force ban — this
+/// one is about spam/automation, not credential guessing specifically.
+/// `ConnectInfo` is only present when served via
+/// `into_make_service_with_connect_info` (absent in the test harness, which
+/// drives the router directly via `tower::ServiceExt::oneshot`), so a
+/// missing one skips the check rather than rejecting the request.
+async fn rate_limit(
+    axum::extract::State(st): axum::extract::State<AppState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    if let Some(ConnectInfo(addr)) = connect_info {
+        if ratelimit::is_rate_limited(&st.rate_limiter, addr.ip()) {
+            tracing::warn!(ip = %addr.ip(), "rate limit exceeded");
+            return (axum::http::StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response();
+        }
+    }
+    next.run(request).await
+}
+
 fn build_router(state: AppState) -> Router {
     // Public routes — no auth required.
     let public = Router::new()
+        .route("/health", get(api::health))
         .route("/login", get(pages::login).post(api::login_post))
         .route("/logout", post(api::logout_post))
         .route("/style.css", get(assets::style_css))
@@ -109,6 +133,7 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(public)
         .merge(protected)
+        .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(request_span)
