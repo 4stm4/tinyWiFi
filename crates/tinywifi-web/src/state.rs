@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use tinywifi_core::{AutoRevert, HostapdConf, MonitorHandle, TinywifiConfig};
 
 use crate::auth;

@@ -16,6 +16,7 @@ rand = "0.8"
 rcgen = { version = "0.14.8", features = ["pem"] }
 axum-server = { version = "0.8.0", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23.41", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+parking_lot = "0.12.5"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

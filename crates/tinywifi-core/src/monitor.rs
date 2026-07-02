@@ -2,8 +2,9 @@
 //! run passive scan (beacons + probe requests via iw).
 
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -141,7 +142,7 @@ pub fn enable_monitor(handle: &MonitorHandle) -> Result<String, String> {
     run("iw", &["dev", &iface, "set", "type", "monitor"])?;
     run("ip", &["link", "set", &iface, "up"])?;
 
-    let mut inner = handle.0.lock().unwrap();
+    let mut inner = handle.0.lock();
     inner.state = MonitorState::On;
     inner.iface = Some(iface.clone());
 
@@ -154,7 +155,7 @@ pub fn enable_monitor(handle: &MonitorHandle) -> Result<String, String> {
 
 pub fn disable_monitor(handle: &MonitorHandle) -> Result<(), String> {
     let iface = {
-        let inner = handle.0.lock().unwrap();
+        let inner = handle.0.lock();
         inner.iface.clone()
     };
 
@@ -164,7 +165,7 @@ pub fn disable_monitor(handle: &MonitorHandle) -> Result<(), String> {
         let _ = run("ip", &["link", "set", iface, "up"]);
     }
 
-    let mut inner = handle.0.lock().unwrap();
+    let mut inner = handle.0.lock();
     inner.state = MonitorState::Off;
     inner.iface = None;
     inner.scan.clear();
@@ -177,7 +178,7 @@ pub fn disable_monitor(handle: &MonitorHandle) -> Result<(), String> {
 /// Refresh scan results from `iw dev <iface> scan dump`.
 pub fn refresh_scan(handle: &MonitorHandle) {
     let iface = {
-        let inner = handle.0.lock().unwrap();
+        let inner = handle.0.lock();
         inner.iface.clone()
     };
     let Some(iface) = iface else { return };
@@ -192,7 +193,7 @@ pub fn refresh_scan(handle: &MonitorHandle) {
         _ => Vec::new(),
     };
 
-    let mut inner = handle.0.lock().unwrap();
+    let mut inner = handle.0.lock();
     if inner.state == MonitorState::On {
         inner.scan = aps;
     }
@@ -234,7 +235,7 @@ fn parse_iw_scan(text: &str) -> Vec<ScannedAp> {
 // ── Status ────────────────────────────────────────────────────────────────────
 
 pub fn monitor_status(handle: &MonitorHandle) -> MonitorStatus {
-    let inner = handle.0.lock().unwrap();
+    let inner = handle.0.lock();
     let adapter = if inner.state == MonitorState::On {
         inner.iface.as_ref().and_then(|i| probe_adapter(i))
     } else {

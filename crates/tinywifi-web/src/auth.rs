@@ -6,10 +6,11 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use argon2::password_hash::rand_core::{OsRng, RngCore};
+use parking_lot::Mutex;
 use argon2::password_hash::SaltString;
 use argon2::{Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier};
 
@@ -48,7 +49,7 @@ pub fn new_login_attempts() -> LoginAttempts {
 
 /// Returns true if this IP is currently banned.
 pub fn is_banned(attempts: &LoginAttempts, ip: IpAddr) -> bool {
-    let map = attempts.lock().unwrap();
+    let map = attempts.lock();
     match map.get(&ip) {
         Some(s) => s.banned_until.map_or(false, |t| t > Instant::now()),
         None => false,
@@ -57,7 +58,7 @@ pub fn is_banned(attempts: &LoginAttempts, ip: IpAddr) -> bool {
 
 /// Record a failed login attempt. Bans the IP after MAX_ATTEMPTS in the window.
 pub fn record_failure(attempts: &LoginAttempts, ip: IpAddr) {
-    let mut map = attempts.lock().unwrap();
+    let mut map = attempts.lock();
     let now = Instant::now();
     let entry = map.entry(ip).or_insert(AttemptState {
         count: 0,
@@ -79,7 +80,7 @@ pub fn record_failure(attempts: &LoginAttempts, ip: IpAddr) {
 
 /// Clear the attempt counter for an IP after a successful login.
 pub fn record_success(attempts: &LoginAttempts, ip: IpAddr) {
-    attempts.lock().unwrap().remove(&ip);
+    attempts.lock().remove(&ip);
 }
 
 /// Generate a random 32-byte hex token and add it to the session store.
@@ -87,15 +88,12 @@ pub fn session_create(sessions: &Sessions) -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    sessions
-        .lock()
-        .unwrap()
-        .insert(token.clone(), Instant::now());
+    sessions.lock().insert(token.clone(), Instant::now());
     token
 }
 
 pub fn session_valid(sessions: &Sessions, token: &str) -> bool {
-    let mut map = sessions.lock().unwrap();
+    let mut map = sessions.lock();
     match map.get(token) {
         Some(t) if t.elapsed() < SESSION_TTL => true,
         Some(_) => {
@@ -107,7 +105,7 @@ pub fn session_valid(sessions: &Sessions, token: &str) -> bool {
 }
 
 pub fn session_remove(sessions: &Sessions, token: &str) {
-    sessions.lock().unwrap().remove(token);
+    sessions.lock().remove(token);
 }
 
 // Lightweight params for embedded hardware (Pi-class).

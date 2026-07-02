@@ -9,9 +9,11 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+use parking_lot::{Condvar, Mutex};
 
 use crate::file::{backup_path, restore_backup};
 use crate::service::{service_restart, service_running};
@@ -88,11 +90,8 @@ impl AutoRevert {
         });
         let st = Arc::clone(&state);
         let handle = thread::spawn(move || {
-            let cancelled = st.cancelled.lock().unwrap();
-            let (cancelled, wait) = st
-                .cvar
-                .wait_timeout_while(cancelled, timeout, |c| !*c)
-                .unwrap();
+            let mut cancelled = st.cancelled.lock();
+            let wait = st.cvar.wait_while_for(&mut cancelled, |c| !*c, timeout);
             // Fire only if we waited the whole timeout without being cancelled.
             if wait.timed_out() && !*cancelled {
                 st.fired.store(true, Ordering::SeqCst);
@@ -110,7 +109,7 @@ impl AutoRevert {
     /// firing, `false` if the timer had already run the action.
     pub fn confirm(&self) -> bool {
         {
-            let mut c = self.state.cancelled.lock().unwrap();
+            let mut c = self.state.cancelled.lock();
             *c = true;
         }
         self.state.cvar.notify_all();
@@ -128,7 +127,7 @@ impl Drop for AutoRevert {
         // Signal the worker to stop waiting so it does not fire after the guard
         // is gone (e.g. replaced by a newer pending change), then reap it.
         {
-            let mut c = self.state.cancelled.lock().unwrap();
+            let mut c = self.state.cancelled.lock();
             *c = true;
         }
         self.state.cvar.notify_all();

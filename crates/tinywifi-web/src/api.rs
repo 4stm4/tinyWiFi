@@ -77,14 +77,14 @@ fn arm_revert(st: &AppState, key: &'static str, path: PathBuf, service: String, 
         discard_backup(&path);
     });
     // Dropping any previous guard for this key cancels its timer.
-    st.pending.lock().unwrap().insert(key, guard);
+    st.pending.lock().insert(key, guard);
 }
 
 /// Confirm a staged change: cancel the timer and discard the retained backup.
 /// Reports whether a pending change existed and whether it was confirmed in
 /// time or had already auto-reverted.
 fn confirm_pending(st: &AppState, key: &'static str, path: &std::path::Path) -> Json<Value> {
-    let guard = st.pending.lock().unwrap().remove(key);
+    let guard = st.pending.lock().remove(key);
     match guard {
         Some(g) if g.confirm() => {
             discard_backup(path);
