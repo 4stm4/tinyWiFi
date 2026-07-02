@@ -3,7 +3,10 @@
 # configs/ are the source of truth that gets installed into the image.
 
 [web]
-listen = "0.0.0.0:8080"
+# HTTPS (self-signed cert generated on first boot into /etc/tinywifi/tls/).
+listen = "0.0.0.0:8443"
+# Plain HTTP; redirects every request to https://.../
+http_redirect_listen = "0.0.0.0:8080"
 
 [display]
 refresh_secs = 10

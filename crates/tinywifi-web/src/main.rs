@@ -3,6 +3,7 @@ mod assets;
 mod auth;
 mod pages;
 mod state;
+mod tls;
 
 #[cfg(test)]
 mod tests;
@@ -10,7 +11,10 @@ mod tests;
 use std::process::ExitCode;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
+use axum::extract::State;
+use axum::http::{header, Uri};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
@@ -106,9 +110,24 @@ fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Redirects every plain-HTTP request to the same path on HTTPS.
+async fn redirect_to_https(State(https_port): State<u16>, headers: axum::http::HeaderMap, uri: Uri) -> impl IntoResponse {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|h| h.split(':').next().unwrap_or(h))
+        .unwrap_or("tinywifi.local");
+    let path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+    Redirect::permanent(&format!("https://{host}:{https_port}{path}"))
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     auth::init();
+    if let Err(e) = tls::init() {
+        eprintln!("tinywifi-web: failed to set up TLS certificate: {e}");
+        return ExitCode::FAILURE;
+    }
 
     let path = config_path();
     let config = match TinywifiConfig::from_path(&path) {
@@ -119,23 +138,63 @@ async fn main() -> ExitCode {
         }
     };
 
-    let listen = config.web.listen.clone();
-    let app = build_router(AppState::new(config));
+    let https_listen = config.web.listen.clone();
+    let http_listen = config.web.http_redirect_listen.clone();
 
-    let listener = match tokio::net::TcpListener::bind(&listen).await {
-        Ok(l) => l,
+    let https_addr: SocketAddr = match https_listen.parse() {
+        Ok(a) => a,
         Err(e) => {
-            eprintln!("tinywifi-web: failed to bind {listen}: {e}");
+            eprintln!("tinywifi-web: invalid web.listen {https_listen:?}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let http_addr: SocketAddr = match http_listen.parse() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("tinywifi-web: invalid web.http_redirect_listen {http_listen:?}: {e}");
             return ExitCode::FAILURE;
         }
     };
 
-    println!("tinywifi-web {} listening on {listen}", tinywifi_core::VERSION);
-    if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-    {
-        eprintln!("tinywifi-web: server error: {e}");
+    let rustls_config = match tls::rustls_config().await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("tinywifi-web: failed to load TLS certificate: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let app = build_router(AppState::new(config));
+    let redirect_app = Router::new()
+        .fallback(redirect_to_https)
+        .with_state(https_addr.port());
+
+    let handle = axum_server::Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+    });
+
+    println!(
+        "tinywifi-web {} listening on https://{https_addr} (http://{http_addr} redirects)",
+        tinywifi_core::VERSION
+    );
+
+    let https_server = axum_server::bind_rustls(https_addr, rustls_config)
+        .handle(handle.clone())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>());
+    let http_server = axum_server::bind(http_addr)
+        .handle(handle)
+        .serve(redirect_app.into_make_service());
+
+    let (https_res, http_res) = tokio::join!(https_server, http_server);
+    if let Err(e) = https_res {
+        eprintln!("tinywifi-web: https server error: {e}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = http_res {
+        eprintln!("tinywifi-web: http redirect server error: {e}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

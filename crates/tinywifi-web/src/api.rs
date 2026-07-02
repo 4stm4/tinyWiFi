@@ -375,7 +375,7 @@ pub async fn login_post(
         auth::maybe_upgrade_hash(&form.password);
         let token = auth::session_create(&st.sessions);
         let cookie = format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400",
+            "{}={}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400",
             auth::SESSION_COOKIE,
             token
         );
@@ -394,7 +394,7 @@ pub async fn logout_post(
         auth::session_remove(&st.sessions, &token);
     }
     let clear = format!(
-        "{}=; Path=/; Max-Age=0",
+        "{}=; Path=/; Secure; Max-Age=0",
         auth::SESSION_COOKIE
     );
     ([(header::SET_COOKIE, clear)], Redirect::to("/login")).into_response()

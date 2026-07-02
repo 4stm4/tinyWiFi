@@ -27,3 +27,12 @@ Wi-Fi/DHCP из панели работают.
 ```sh
 TINYWIFI_CONFIG=/etc/tinywifi/web.toml /usr/sbin/tinywifi-web
 ```
+
+## TLS
+
+При первом запуске `tinywifi-web` сам генерирует самоподписанный сертификат
+в `/etc/tinywifi/tls/{cert.pem,key.pem}` и слушает `[web].listen` (HTTPS) и
+`[web].http_redirect_listen` (HTTP, редиректит на HTTPS). Порты 80/443 —
+привилегированные, процесс должен запускаться от root (как и сейчас).
+`/etc/tinywifi/` должен быть на writable-разделе — иначе генерация
+сертификата упадёт при старте, как и создание `/etc/tinywifi/auth`.

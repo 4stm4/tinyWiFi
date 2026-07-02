@@ -13,6 +13,7 @@ use tinywifi_core::config::{
 
 use crate::build_router;
 use crate::state::AppState;
+use crate::auth;
 
 const HOSTAPD: &str = "\
 interface=wlan0
@@ -38,10 +39,13 @@ lease_file=/var/lib/nanodhcp/leases
 ";
 
 /// A temp dir holding hostapd/nanodhcp configs plus the matching `AppState`.
-/// The dir is kept alive for as long as the returned guard lives.
+/// The dir is kept alive for as long as the returned guard lives. Carries a
+/// pre-authenticated session token since every `/api/*` and page route is
+/// behind `require_auth`.
 struct Fixture {
     _dir: tempfile::TempDir,
     state: AppState,
+    session: String,
 }
 
 fn fixture() -> Fixture {
@@ -54,31 +58,41 @@ fn fixture() -> Fixture {
     let config = TinywifiConfig {
         web: WebConfig {
             listen: "127.0.0.1:0".to_string(),
+            http_redirect_listen: "127.0.0.1:0".to_string(),
         },
         display: DisplayConfig { refresh_secs: 5 },
         paths: Paths {
             hostapd_conf: hostapd,
             nanodhcp_conf: nanodhcp,
-            // Deliberately absent so leases degrade to "empty".
+            // Deliberately absent so nanodns/leases degrade to "empty".
+            nanodns_conf: dir.path().join("nanodns-absent"),
             leases_file: dir.path().join("leases-absent"),
         },
         services: Services {
             hostapd: "hostapd".to_string(),
             nanodhcp: "nanodhcp".to_string(),
+            nanodns: "nanodns".to_string(),
             web: "tinywifi-web".to_string(),
             display: "tinywifi-display".to_string(),
         },
     };
 
+    let state = AppState::new(config);
+    let session = auth::session_create(&state.sessions);
+
     Fixture {
         _dir: dir,
-        state: AppState::new(config),
+        state,
+        session,
     }
 }
 
-async fn send(state: &AppState, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, String) {
-    let router = build_router(state.clone());
-    let builder = Request::builder().method(method).uri(uri);
+async fn send(f: &Fixture, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, String) {
+    let router = build_router(f.state.clone());
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("cookie", format!("{}={}", auth::SESSION_COOKIE, f.session));
     let req = match body {
         Some(b) => builder
             .header("content-type", "application/json")
@@ -95,7 +109,7 @@ async fn send(state: &AppState, method: &str, uri: &str, body: Option<&str>) -> 
 #[tokio::test]
 async fn status_endpoint_returns_shape() {
     let f = fixture();
-    let (status, body) = send(&f.state, "GET", "/api/status", None).await;
+    let (status, body) = send(&f, "GET", "/api/status", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"hostapd\""), "body: {body}");
     assert!(body.contains("\"wlan0\""), "body: {body}");
@@ -104,7 +118,7 @@ async fn status_endpoint_returns_shape() {
 #[tokio::test]
 async fn wifi_get_reads_real_config() {
     let f = fixture();
-    let (status, body) = send(&f.state, "GET", "/api/wifi", None).await;
+    let (status, body) = send(&f, "GET", "/api/wifi", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"ssid\":\"TestNet\""), "body: {body}");
     assert!(body.contains("\"channel\":6"), "body: {body}");
@@ -113,7 +127,7 @@ async fn wifi_get_reads_real_config() {
 #[tokio::test]
 async fn dhcp_get_parses_key_value_config() {
     let f = fixture();
-    let (status, body) = send(&f.state, "GET", "/api/dhcp", None).await;
+    let (status, body) = send(&f, "GET", "/api/dhcp", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"range_start\":\"192.168.44.100\""), "body: {body}");
     assert!(body.contains("\"gateway\":\"192.168.44.1\""), "body: {body}");
@@ -122,7 +136,7 @@ async fn dhcp_get_parses_key_value_config() {
 #[tokio::test]
 async fn leases_degrade_to_empty_when_file_absent() {
     let f = fixture();
-    let (status, body) = send(&f.state, "GET", "/api/leases", None).await;
+    let (status, body) = send(&f, "GET", "/api/leases", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"state\":\"empty\""), "body: {body}");
 }
@@ -130,7 +144,7 @@ async fn leases_degrade_to_empty_when_file_absent() {
 #[tokio::test]
 async fn services_lists_all_four() {
     let f = fixture();
-    let (status, body) = send(&f.state, "GET", "/api/services", None).await;
+    let (status, body) = send(&f, "GET", "/api/services", None).await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let obj = json.as_object().unwrap();
@@ -142,7 +156,7 @@ async fn services_lists_all_four() {
 #[tokio::test]
 async fn dashboard_renders_html_with_ssid() {
     let f = fixture();
-    let (status, body) = send(&f.state, "GET", "/dashboard", None).await;
+    let (status, body) = send(&f, "GET", "/dashboard", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("<title>TinyWifi — Dashboard</title>"), "body head: {}", &body[..body.len().min(200)]);
     assert!(body.contains("TestNet"), "expected SSID in dashboard");
@@ -151,7 +165,7 @@ async fn dashboard_renders_html_with_ssid() {
 #[tokio::test]
 async fn index_redirects_to_dashboard() {
     let f = fixture();
-    let (status, _) = send(&f.state, "GET", "/", None).await;
+    let (status, _) = send(&f, "GET", "/", None).await;
     assert!(
         status == StatusCode::SEE_OTHER || status.is_redirection(),
         "status: {status}"
@@ -161,7 +175,7 @@ async fn index_redirects_to_dashboard() {
 #[tokio::test]
 async fn wifi_confirm_with_nothing_pending() {
     let f = fixture();
-    let (status, body) = send(&f.state, "POST", "/api/wifi/confirm", None).await;
+    let (status, body) = send(&f, "POST", "/api/wifi/confirm", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"no_pending\""), "body: {body}");
 }
@@ -172,13 +186,13 @@ async fn wifi_post_invalid_settings_is_rejected() {
     // Empty SSID and a too-short password fail validation before any disk or
     // service interaction, so this must be a clean 400.
     let bad = r#"{"ssid":"","passphrase":"short","country_code":"US","channel":6}"#;
-    let (status, body) = send(&f.state, "POST", "/api/wifi", Some(bad)).await;
+    let (status, body) = send(&f, "POST", "/api/wifi", Some(bad)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
 }
 
 #[tokio::test]
 async fn unknown_route_is_404() {
     let f = fixture();
-    let (status, _) = send(&f.state, "GET", "/api/nope", None).await;
+    let (status, _) = send(&f, "GET", "/api/nope", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }

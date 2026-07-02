@@ -13,6 +13,9 @@ axum = { version = "0.7", features = ["form"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 argon2 = "0.5"
 rand = "0.8"
+rcgen = { version = "0.14.8", features = ["pem"] }
+axum-server = { version = "0.8.0", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23.41", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

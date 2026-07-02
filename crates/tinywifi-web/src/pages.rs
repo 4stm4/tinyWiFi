@@ -17,6 +17,7 @@ use tinywifi_core::{
 
 use crate::auth;
 use crate::state::AppState;
+use crate::tls;
 
 
 fn escape(s: &str) -> String {
@@ -134,6 +135,16 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
     } else {
         ""
     };
+    let self_signed_banner = if tls::is_self_signed() {
+        "<div class=\"alert alert--warn\">\
+         ⚠ <span class=\"t-ru\">Используется самоподписанный TLS-сертификат — браузер \
+         покажет предупреждение при первом входе, это ожидаемо для локального устройства.</span>\
+         <span class=\"t-en\">Using a self-signed TLS certificate — your browser will warn \
+         on first visit, which is expected for a local device.</span>\
+         </div>\n"
+    } else {
+        ""
+    };
     Html(format!(
         "<!DOCTYPE html>\n<html lang=\"ru\" data-theme=\"dark\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
@@ -159,6 +170,7 @@ fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
          </button></form>\n\
          </header>\n\
          {default_pw_banner}\
+         {self_signed_banner}\
          <main class=\"page\">\n\
          <div class=\"page__head\">\
          <h1 class=\"page__title\"><span class=\"en\">{en}</span>\

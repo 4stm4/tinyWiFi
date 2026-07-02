@@ -22,8 +22,16 @@ pub struct TinywifiConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebConfig {
-    /// Address the web server binds to, e.g. `0.0.0.0:8080`.
+    /// HTTPS address the web server binds to, e.g. `0.0.0.0:443`.
     pub listen: String,
+    /// Plain-HTTP address that redirects to `listen`, e.g. `0.0.0.0:80`.
+    /// Defaulted so existing configs without this field still parse.
+    #[serde(default = "default_http_redirect_listen")]
+    pub http_redirect_listen: String,
+}
+
+fn default_http_redirect_listen() -> String {
+    "0.0.0.0:80".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,7 +107,8 @@ mod tests {
     #[test]
     fn reads_real_config() {
         let cfg = TinywifiConfig::parse(REAL_CONFIG).unwrap();
-        assert_eq!(cfg.web.listen, "0.0.0.0:8080");
+        assert_eq!(cfg.web.listen, "0.0.0.0:8443");
+        assert_eq!(cfg.web.http_redirect_listen, "0.0.0.0:8080");
         assert_eq!(cfg.display.refresh_secs, 10);
         assert_eq!(cfg.paths.nanodhcp_conf, PathBuf::from("/etc/nanodhcp/nanodhcp.conf"));
         assert_eq!(cfg.paths.nanodns_conf, PathBuf::from("/etc/nanodns/config"));
@@ -107,5 +116,17 @@ mod tests {
         assert_eq!(cfg.services.hostapd, "hostapd");
         assert_eq!(cfg.services.nanodns, "nanodns");
         assert_eq!(cfg.services.display, "tinywifi-display");
+    }
+
+    /// Configs written before TLS support was added lack `http_redirect_listen`;
+    /// they must still parse instead of failing to boot.
+    #[test]
+    fn web_config_without_http_redirect_listen_uses_default() {
+        let toml = REAL_CONFIG.replace(
+            "http_redirect_listen = \"0.0.0.0:8080\"\n",
+            "",
+        );
+        let cfg = TinywifiConfig::parse(&toml).unwrap();
+        assert_eq!(cfg.web.http_redirect_listen, "0.0.0.0:80");
     }
 }

@@ -3,7 +3,10 @@
 # TINYWIFI_CONFIG=/etc/tinywifi/web.toml.
 
 [web]
-listen = "0.0.0.0:80"
+# HTTPS (self-signed cert auto-generated into /etc/tinywifi/tls/ on first boot).
+listen = "0.0.0.0:443"
+# Plain HTTP; every request is redirected to https://.../
+http_redirect_listen = "0.0.0.0:80"
 
 [display]
 refresh_secs = 5

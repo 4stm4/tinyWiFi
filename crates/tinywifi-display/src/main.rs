@@ -26,7 +26,8 @@ fn config_path() -> String {
 fn default_config() -> TinywifiConfig {
     TinywifiConfig {
         web: WebConfig {
-            listen: "0.0.0.0:8080".to_string(),
+            listen: "0.0.0.0:8443".to_string(),
+            http_redirect_listen: "0.0.0.0:8080".to_string(),
         },
         display: DisplayConfig { refresh_secs: 10 },
         paths: Paths {

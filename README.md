@@ -36,7 +36,8 @@ in-repo `configs/tinywifi.toml`.
 
 ```toml
 [web]
-listen = "0.0.0.0:80"
+listen = "0.0.0.0:443"
+http_redirect_listen = "0.0.0.0:80"
 
 [display]
 refresh_secs = 5
@@ -52,6 +53,14 @@ nanodhcp = "nanodhcp"
 web      = "tinywifi-web"
 display  = "tinywifi-display"
 ```
+
+`listen` is the HTTPS address; `http_redirect_listen` is a plain-HTTP
+listener that 301-redirects every request to HTTPS. On first boot
+`tinywifi-web` generates a self-signed certificate into `/etc/tinywifi/tls/`
+(there's no domain name on a LAN device, so the browser will show a
+"not trusted" warning on first visit — expected, click through once).
+Configs written before this feature existed still parse: a missing
+`http_redirect_listen` defaults to `0.0.0.0:80`.
 
 Target file formats:
 - `hostapd.conf` — standard `key=value`; edits are line-preserving (comments and
