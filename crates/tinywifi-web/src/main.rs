@@ -13,13 +13,15 @@ use std::process::ExitCode;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use axum::extract::State;
-use axum::http::{header, Uri};
+use axum::extract::{ConnectInfo, State};
+use axum::http::{header, Request, Response, Uri};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::Router;
 use tinywifi_core::config::{self, TinywifiConfig};
+use tower_http::trace::TraceLayer;
+use tracing::Span;
 
 use crate::state::AppState;
 
@@ -107,7 +109,26 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(public)
         .merge(protected)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(request_span)
+                .on_response(log_response),
+        )
         .with_state(state)
+}
+
+/// One span per request, tagged with the client IP when available (only
+/// present when served via `into_make_service_with_connect_info`).
+fn request_span<B>(req: &Request<B>) -> Span {
+    let ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    tracing::info_span!("http", method = %req.method(), path = %req.uri().path(), ip = tracing::field::debug(ip))
+}
+
+fn log_response<B>(response: &Response<B>, latency: Duration, _span: &Span) {
+    tracing::info!(status = %response.status(), latency_ms = latency.as_millis(), "request completed");
 }
 
 /// Redirects every plain-HTTP request to the same path on HTTPS.
@@ -121,11 +142,21 @@ async fn redirect_to_https(State(https_port): State<u16>, headers: axum::http::H
     Redirect::permanent(&format!("https://{host}:{https_port}{path}"))
 }
 
+/// Reads `RUST_LOG` (standard `tracing` convention); defaults to `info` so
+/// admin actions and request audit logs show up without extra config.
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
+    init_logging();
+
     auth::init();
     if let Err(e) = tls::init() {
-        eprintln!("tinywifi-web: failed to set up TLS certificate: {e}");
+        tracing::error!("failed to set up TLS certificate: {e}");
         return ExitCode::FAILURE;
     }
 
@@ -133,7 +164,7 @@ async fn main() -> ExitCode {
     let config = match TinywifiConfig::from_path(&path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("tinywifi-web: failed to load config from {path}: {e}");
+            tracing::error!("failed to load config from {path}: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -144,14 +175,14 @@ async fn main() -> ExitCode {
     let https_addr: SocketAddr = match https_listen.parse() {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("tinywifi-web: invalid web.listen {https_listen:?}: {e}");
+            tracing::error!("invalid web.listen {https_listen:?}: {e}");
             return ExitCode::FAILURE;
         }
     };
     let http_addr: SocketAddr = match http_listen.parse() {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("tinywifi-web: invalid web.http_redirect_listen {http_listen:?}: {e}");
+            tracing::error!("invalid web.http_redirect_listen {http_listen:?}: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -159,7 +190,7 @@ async fn main() -> ExitCode {
     let rustls_config = match tls::rustls_config().await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("tinywifi-web: failed to load TLS certificate: {e}");
+            tracing::error!("failed to load TLS certificate: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -176,9 +207,9 @@ async fn main() -> ExitCode {
         shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
     });
 
-    println!(
-        "tinywifi-web {} listening on https://{https_addr} (http://{http_addr} redirects)",
-        tinywifi_core::VERSION
+    tracing::info!(
+        version = tinywifi_core::VERSION,
+        "listening on https://{https_addr} (http://{http_addr} redirects)"
     );
 
     let https_server = axum_server::bind_rustls(https_addr, rustls_config)
@@ -190,11 +221,11 @@ async fn main() -> ExitCode {
 
     let (https_res, http_res) = tokio::join!(https_server, http_server);
     if let Err(e) = https_res {
-        eprintln!("tinywifi-web: https server error: {e}");
+        tracing::error!("https server error: {e}");
         return ExitCode::FAILURE;
     }
     if let Err(e) = http_res {
-        eprintln!("tinywifi-web: http redirect server error: {e}");
+        tracing::error!("http redirect server error: {e}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

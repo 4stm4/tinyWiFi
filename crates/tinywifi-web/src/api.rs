@@ -195,10 +195,12 @@ pub async fn service_restart_handler(
     }
     service_restart(&name)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tracing::info!(service = %name, "service restart requested");
     Ok(ok())
 }
 
 pub async fn reboot() -> Result<Json<Value>, ApiError> {
+    tracing::warn!("system reboot requested");
     // The reboot mechanism varies by host: systemd uses `systemctl reboot`,
     // while the on-device busybox/SysV image has `/sbin/reboot`. Try the known
     // mechanisms in order and succeed on the first that runs — a missing binary
@@ -367,6 +369,7 @@ pub async fn login_post(
 ) -> Response {
     let ip = addr.ip();
     if auth::is_banned(&st.login_attempts, ip) {
+        tracing::warn!(%ip, "login attempt while banned");
         return Redirect::to("/login?err=2").into_response();
     }
     let hash = auth::read_hash().unwrap_or_default();
@@ -374,6 +377,7 @@ pub async fn login_post(
         auth::record_success(&st.login_attempts, ip);
         auth::maybe_upgrade_hash(&form.password);
         let token = auth::session_create(&st.sessions);
+        tracing::info!(%ip, "login succeeded");
         let cookie = format!(
             "{}={}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=86400",
             auth::SESSION_COOKIE,
@@ -382,6 +386,7 @@ pub async fn login_post(
         ([(header::SET_COOKIE, cookie)], Redirect::to("/dashboard")).into_response()
     } else {
         auth::record_failure(&st.login_attempts, ip);
+        tracing::warn!(%ip, "login failed");
         Redirect::to("/login?err=1").into_response()
     }
 }
@@ -420,6 +425,7 @@ pub async fn change_password(
         Ok(new_hash) => match auth::write_hash(&new_hash) {
             Ok(_) => {
                 auth::on_password_changed();
+                tracing::info!("admin password changed");
                 Json(json!({ "status": "ok" })).into_response()
             }
             Err(e) => ApiError::new(
