@@ -448,6 +448,19 @@ pub async fn change_password(
     }
 }
 
+pub async fn features_get() -> Json<crate::features::Features> {
+    Json(crate::features::read())
+}
+
+pub async fn features_post(
+    Json(features): Json<crate::features::Features>,
+) -> Result<Json<Value>, ApiError> {
+    crate::features::write(&features)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tracing::info!(adblock = features.adblock, monitor = features.monitor, "feature visibility changed");
+    Ok(ok())
+}
+
 fn wifi_error(e: WifiError) -> ApiError {
     let status = match e {
         WifiError::Validation(_) => StatusCode::BAD_REQUEST,

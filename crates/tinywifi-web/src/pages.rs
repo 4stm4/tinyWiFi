@@ -16,6 +16,7 @@ use tinywifi_core::{
 };
 
 use crate::auth;
+use crate::features;
 use crate::state::AppState;
 use crate::tls;
 
@@ -113,8 +114,14 @@ const NAV_I18N: &[(&str, &str, &str)] = &[
 ];
 
 fn layout(title: &str, en: &str, active: &str, body: &str) -> Html<String> {
+    let visible_features = features::read();
     let nav = NAV_I18N
         .iter()
+        .filter(|(href, _, _)| match *href {
+            "/monitor" => visible_features.monitor,
+            "/adblock" => visible_features.adblock,
+            _ => true,
+        })
         .map(|(href, ru, eng)| {
             let cls = if *href == active {
                 "tw-nav__item is-active"
@@ -1232,6 +1239,21 @@ async function twChangePassword(btn){\n\
   } catch(e){ out.style.color='red'; out.textContent=t('Сбой: ','Failure: ')+e; }\n\
   btn.disabled = false;\n\
 }\n\
+async function twFeatureToggle(){\n\
+  const out = document.getElementById('feat-result');\n\
+  const monitor = document.getElementById('feat-monitor').checked;\n\
+  const adblock = document.getElementById('feat-adblock').checked;\n\
+  out.style.color=''; out.textContent=t('Сохранение…','Saving…');\n\
+  try {\n\
+    const r = await fetch('/api/features',{method:'POST',\n\
+      headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify({monitor:monitor,adblock:adblock})});\n\
+    let j={}; try{j=await r.json();}catch(e){}\n\
+    if(r.ok){ out.style.color='green'; out.textContent=t('Сохранено ✓','Saved ✓');\n\
+      setTimeout(function(){ location.reload(); }, 800); }\n\
+    else{ out.style.color='red'; out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText); }\n\
+  } catch(e){ out.style.color='red'; out.textContent=t('Сбой: ','Failure: ')+e; }\n\
+}\n\
 </script>\n";
 
 pub async fn system(State(st): State<AppState>) -> Html<String> {
@@ -1325,6 +1347,27 @@ pub async fn system(State(st): State<AppState>) -> Html<String> {
          </div>\
          </div>\n",
     );
+
+    // ── Menu ──────────────────────────────────────────────────────────────────
+    let feat = features::read();
+    body.push_str(&format!(
+        "<h2><span class=\"t-ru\">Меню</span><span class=\"t-en\">Menu</span></h2>\n\
+         <table class=\"tbl\" style=\"max-width:480px;margin-bottom:1.5rem\"><tbody>\n\
+         <tr><td><span class=\"t-ru\">Радар</span><span class=\"t-en\">Radar</span></td>\
+         <td class=\"num\"><label class=\"switch{}\" title=\"toggle\">\
+         <input type=\"checkbox\" id=\"feat-monitor\"{} onchange=\"twFeatureToggle()\">\
+         <span class=\"switch__knob\"></span></label></td></tr>\n\
+         <tr><td>AdBlock</td>\
+         <td class=\"num\"><label class=\"switch{}\" title=\"toggle\">\
+         <input type=\"checkbox\" id=\"feat-adblock\"{} onchange=\"twFeatureToggle()\">\
+         <span class=\"switch__knob\"></span></label></td></tr>\n\
+         </tbody></table>\n\
+         <p id=\"feat-result\" role=\"status\" style=\"font-size:.85rem;margin:-1rem 0 1.5rem\"></p>\n",
+        if feat.monitor { " switch--on" } else { "" },
+        if feat.monitor { " checked" } else { "" },
+        if feat.adblock { " switch--on" } else { "" },
+        if feat.adblock { " checked" } else { "" },
+    ));
 
     // ── Reboot ────────────────────────────────────────────────────────────────
     body.push_str(

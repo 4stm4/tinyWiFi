@@ -1,6 +1,7 @@
 mod api;
 mod assets;
 mod auth;
+mod features;
 mod pages;
 mod ratelimit;
 mod state;
@@ -48,6 +49,31 @@ async fn require_auth(
         }
     }
     Redirect::to("/login").into_response()
+}
+
+/// Middleware: 404s the Radar page/API while it's turned off in System
+/// settings — unreachable, not just hidden from the nav.
+async fn require_monitor_enabled(
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    if features::read().monitor {
+        next.run(request).await
+    } else {
+        (axum::http::StatusCode::NOT_FOUND, "Not Found").into_response()
+    }
+}
+
+/// Same as [`require_monitor_enabled`], for the AdBlock page/API.
+async fn require_adblock_enabled(
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    if features::read().adblock {
+        next.run(request).await
+    } else {
+        (axum::http::StatusCode::NOT_FOUND, "Not Found").into_response()
+    }
 }
 
 /// Middleware: rejects with 429 once an IP exceeds its request budget.
@@ -118,13 +144,25 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/system/reboot", post(api::reboot))
         .route("/api/auth/password", post(api::change_password))
+        .route("/api/features", get(api::features_get).post(api::features_post));
+
+    // Radar and AdBlock can be turned off from System settings: their pages
+    // and APIs 404 while disabled, on top of (i.e. inside) the auth check.
+    let monitor_routes = Router::new()
         .route("/monitor", get(pages::monitor))
         .route("/api/monitor", get(api::monitor_get).post(api::monitor_post))
         .route("/api/monitor/detect", get(api::monitor_detect))
+        .route_layer(middleware::from_fn(require_monitor_enabled));
+    let adblock_routes = Router::new()
         .route("/adblock", get(pages::adblock))
         .route("/api/adblock", get(api::adblock_get).post(api::adblock_post))
         .route("/api/adblock/update", post(api::adblock_update))
         .route("/api/adblock/custom", post(api::adblock_custom_add).delete(api::adblock_custom_remove))
+        .route_layer(middleware::from_fn(require_adblock_enabled));
+
+    let protected = protected
+        .merge(monitor_routes)
+        .merge(adblock_routes)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_auth,
