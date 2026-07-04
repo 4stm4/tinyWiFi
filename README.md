@@ -3,6 +3,9 @@
 Management for a Wi-Fi access point on a Raspberry Pi / embedded Linux:
 a web panel and a background display daemon on top of `hostapd` and `nanodhcp`.
 
+Hardware target: **Raspberry Pi Zero 2W** with a Waveshare 2.13″ V3 e-paper
+display (SSD1675B, 122×250 px, SPI).
+
 Core project rule: **always check that a service/file/interface is available
 before reading, restarting, or rendering** — never panic on a missing config or
 service; everything degrades gracefully.
@@ -15,7 +18,7 @@ A Cargo workspace of three crates:
 |---|---|
 | `tinywifi-core` | Shared logic: file/service/interface checks, config parsers (hostapd, nanodhcp), leases, host metrics, the status model, and safe edits with rollback. |
 | `tinywifi-web` | axum HTTP panel: dashboard, Wi-Fi/DHCP/Leases/System pages, and the REST API. |
-| `tinywifi-display` | Daemon that draws device status (console for now, a real screen driver later via the `Renderer` trait). |
+| `tinywifi-display` | Daemon that renders device status on a Waveshare 2.13″ e-paper display (SSD1675B driver via `embedded-graphics`). Falls back to console output when SPI is unavailable. |
 
 ## Build
 
@@ -25,8 +28,8 @@ cargo build --release
 
 Binaries: `target/release/tinywifi-web`, `target/release/tinywifi-display`.
 
-On an embedded target (Buildroot/glibc, aarch64) a binary built on a host with
-an older glibc runs forward-compatibly.
+Cross-compile for Pi Zero 2W (aarch64-unknown-linux-gnu) on a faster host, then
+push the binary over SSH — the Pi Zero itself is too slow for a full build.
 
 ## Configuration
 
@@ -40,7 +43,7 @@ listen = "0.0.0.0:443"
 http_redirect_listen = "0.0.0.0:80"
 
 [display]
-refresh_secs = 5
+refresh_secs = 60
 
 [paths]
 hostapd_conf  = "/etc/hostapd/hostapd.conf"
@@ -67,6 +70,29 @@ Target file formats:
   unknown directives survive a round-trip).
 - `nanodhcp.conf` — `key=value` (`pool_start`/`pool_end`/`router`/`lease_file`,
   etc.); unknown keys are preserved on write.
+
+## Wi-Fi client compatibility
+
+Modern mobile clients (iOS 17+, Android 12+) require **Protected Management
+Frames** (PMF / 802.11w) to complete a WPA2 handshake. Without PMF the client
+associates but immediately disassociates before the 4-way handshake — from the
+outside it looks like a wrong password.
+
+The reference config at [`configs/hostapd.conf`](configs/hostapd.conf) is set
+correctly:
+
+```
+wpa_key_mgmt=WPA-PSK   # single AKM — do not add WPA-PSK-SHA256 here
+rsn_pairwise=CCMP
+ieee80211w=1            # PMF optional (compatible with old and new clients)
+okc=0
+```
+
+**Important:** listing two key-management suites (`WPA-PSK WPA-PSK-SHA256`)
+causes a PMKSA cache mismatch on reconnect — the client connects once, caches
+a PMKSA under one AKM, then on the next reconnect the PMKID check fails against
+the other AKM, producing an infinite associate/disassociate loop. Use exactly
+one suite.
 
 ## REST API
 
