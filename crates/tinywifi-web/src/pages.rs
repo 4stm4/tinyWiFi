@@ -1050,14 +1050,24 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
                             style=\"color:var(--text-muted);font-size:1rem;padding:.2rem .4rem\">☆</button>")
                     }
                 },
-                btn = if is_up {
-                    format!("<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\">\
-                        <span class=\"t-ru\">Отключить</span><span class=\"t-en\">Disconnect</span></button>",
-                        n = escape(&t.name))
-                } else {
-                    format!("<button class=\"btn btn--primary btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/up',this)\">\
-                        <span class=\"t-ru\">Подключить</span><span class=\"t-en\">Connect</span></button>",
-                        n = escape(&t.name))
+                btn = {
+                    let n = escape(&t.name);
+                    let connect_btn = if is_up {
+                        format!("<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\">\
+                            <span class=\"t-ru\">Отключить</span><span class=\"t-en\">Disconnect</span></button>")
+                    } else {
+                        format!("<button class=\"btn btn--primary btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/up',this)\">\
+                            <span class=\"t-ru\">Подключить</span><span class=\"t-en\">Connect</span></button>")
+                    };
+                    let delete_btn = format!(
+                        "<button class=\"btn btn--ghost btn--sm\" \
+                         onclick=\"vpnDelete('/api/vpn/{n}','{name}',this)\" \
+                         style=\"color:var(--status-err,#c0392b);padding:.2rem .4rem\" \
+                         title=\"{del_title}\">🗑</button>",
+                        name = escape(&t.name),
+                        del_title = "Удалить / Delete",
+                    );
+                    format!("{connect_btn}{delete_btn}")
                 },
             ));
         }
@@ -1180,6 +1190,17 @@ async function vpnAct(url,btn){\n\
     if(out){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   }\n\
   btn.disabled=false;\n\
+}\n\
+\n\
+async function vpnDelete(url,name,btn){\n\
+  var msg=t('Удалить туннель «'+name+'»? Это действие необратимо.','Delete tunnel \"'+name+'\"? This cannot be undone.');\n\
+  if(!confirm(msg))return;\n\
+  btn.disabled=true;\n\
+  try{\n\
+    var r=await fetch(url,{method:'DELETE'});\n\
+    if(r.ok){location.reload();}\n\
+    else{var j={};try{j=await r.json();}catch(e){}alert(j.error||r.statusText);btn.disabled=false;}\n\
+  }catch(e){alert(t('Сбой: ','Failure: ')+e);btn.disabled=false;}\n\
 }\n\
 \n\
 async function vpnAutostart(url,enable,btn){\n\

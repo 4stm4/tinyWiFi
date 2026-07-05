@@ -123,6 +123,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/vpn", get(api::vpn_list).post(api::vpn_import))
         .route("/api/vpn/:name/up", post(api::vpn_up))
         .route("/api/vpn/:name/down", post(api::vpn_down))
+        .route("/api/vpn/:name", axum::routing::delete(api::vpn_delete))
         .route("/api/vpn/:name/autostart", post(api::vpn_autostart_post).delete(api::vpn_autostart_delete))
         .route("/api/vpn/bypass", get(api::vpn_bypass_get).post(api::vpn_bypass_post))
         .route("/api/status", get(api::status))

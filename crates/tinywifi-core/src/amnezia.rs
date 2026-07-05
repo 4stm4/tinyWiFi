@@ -453,6 +453,25 @@ fn iface_exists_in_kernel(name: &str) -> bool {
     Path::new(&format!("/sys/class/net/{name}")).exists()
 }
 
+/// Delete a tunnel: bring it down (if up), remove the config file, clear autostart.
+pub fn delete_tunnel(name: &str, dir: impl AsRef<Path>) -> Result<(), String> {
+    // Bring down first if the interface exists
+    if iface_exists_in_kernel(name) {
+        tunnel_down(name)?;
+    }
+    // Remove .conf file
+    let conf_path = dir.as_ref().join(format!("{name}.conf"));
+    if conf_path.exists() {
+        std::fs::remove_file(&conf_path)
+            .map_err(|e| format!("remove {}: {e}", conf_path.display()))?;
+    }
+    // Clear autostart if this was the autostart tunnel
+    if get_autostart().as_deref() == Some(name) {
+        let _ = set_autostart(None);
+    }
+    Ok(())
+}
+
 /// Returns the tunnel name configured for autostart, if any.
 pub fn get_autostart() -> Option<String> {
     let s = std::fs::read_to_string(VPN_AUTOSTART_PATH).ok()?;
