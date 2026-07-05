@@ -1031,12 +1031,25 @@ pub async fn vpn(_st: State<AppState>) -> Html<String> {
                  <div style=\"font-size:.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap\">{ep}</div>\
                  </div>\
                  <div id=\"vpn-result-{n}\" class=\"note\" role=\"status\" style=\"font-size:.8rem\"></div>\
+                 {autostart_btn}\
                  {btn}\
                  </div>\n",
                 dot_color = dot_color,
                 name = escape(&t.name),
                 ep = escape(endpoint),
                 n = escape(&t.name),
+                autostart_btn = {
+                    let n = escape(&t.name);
+                    if t.autostart {
+                        format!("<button class=\"btn btn--ghost btn--sm\" title=\"Autostart: ON\" \
+                            onclick=\"vpnAutostart('/api/vpn/{n}/autostart',false,this)\" \
+                            style=\"color:var(--status-ok);font-size:1rem;padding:.2rem .4rem\">★</button>")
+                    } else {
+                        format!("<button class=\"btn btn--ghost btn--sm\" title=\"Autostart: OFF\" \
+                            onclick=\"vpnAutostart('/api/vpn/{n}/autostart',true,this)\" \
+                            style=\"color:var(--text-muted);font-size:1rem;padding:.2rem .4rem\">☆</button>")
+                    }
+                },
                 btn = if is_up {
                     format!("<button class=\"btn btn--ghost btn--sm\" onclick=\"vpnAct('/api/vpn/{n}/down',this)\">\
                         <span class=\"t-ru\">Отключить</span><span class=\"t-en\">Disconnect</span></button>",
@@ -1167,6 +1180,15 @@ async function vpnAct(url,btn){\n\
     if(out){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
   }\n\
   btn.disabled=false;\n\
+}\n\
+\n\
+async function vpnAutostart(url,enable,btn){\n\
+  btn.disabled=true;\n\
+  try{\n\
+    var r=await fetch(url,{method:enable?'POST':'DELETE'});\n\
+    if(r.ok){setTimeout(function(){location.reload();},300);}\n\
+    else{var j={};try{j=await r.json();}catch(e){}alert(j.error||r.statusText);btn.disabled=false;}\n\
+  }catch(e){alert(t('Сбой: ','Failure: ')+e);btn.disabled=false;}\n\
 }\n\
 \n\
 async function bypassSave(entries){\n\

@@ -22,6 +22,9 @@ pub const AWG_CONF_DIR: &str = "/etc/amnezia/amneziawg";
 /// IPs/CIDRs that always route through WAN even when VPN is up (one per line).
 pub const VPN_BYPASS_PATH: &str = "/etc/tinywifi/vpn_bypass.conf";
 
+/// Tunnel name to bring up automatically on service start (one line, no newline required).
+pub const VPN_AUTOSTART_PATH: &str = "/etc/tinywifi/vpn_autostart";
+
 /// Saved routing state written on tunnel_up, read on tunnel_down.
 const VPN_ROUTE_STATE_PATH: &str = "/tmp/tinywifi_vpn_state";
 
@@ -87,6 +90,7 @@ pub struct AwgTunnel {
     pub iface: AwgInterface,
     pub peers: Vec<AwgPeer>,
     pub status: AwgTunnelStatus,
+    pub autostart: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -449,6 +453,29 @@ fn iface_exists_in_kernel(name: &str) -> bool {
     Path::new(&format!("/sys/class/net/{name}")).exists()
 }
 
+/// Returns the tunnel name configured for autostart, if any.
+pub fn get_autostart() -> Option<String> {
+    let s = std::fs::read_to_string(VPN_AUTOSTART_PATH).ok()?;
+    let name = s.trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Sets or clears the autostart tunnel.
+/// Pass `Some(name)` to enable, `None` to disable.
+pub fn set_autostart(name: Option<&str>) -> Result<(), String> {
+    match name {
+        Some(n) => {
+            std::fs::write(VPN_AUTOSTART_PATH, format!("{n}\n"))
+                .map_err(|e| format!("write {VPN_AUTOSTART_PATH}: {e}"))
+        }
+        None => {
+            match std::fs::remove_file(VPN_AUTOSTART_PATH) {
+                Ok(()) | Err(_) => Ok(()),
+            }
+        }
+    }
+}
+
 /// Scan `dir` for `*.conf` files and return tunnels with runtime status.
 /// Status is detected via `ip link` (not awg show) — works for both backends.
 pub fn scan_tunnels(dir: impl AsRef<Path>) -> Vec<AwgTunnel> {
@@ -457,6 +484,7 @@ pub fn scan_tunnels(dir: impl AsRef<Path>) -> Vec<AwgTunnel> {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
+    let autostart_name = get_autostart();
     let mut tunnels: Vec<AwgTunnel> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -475,7 +503,8 @@ pub fn scan_tunnels(dir: impl AsRef<Path>) -> Vec<AwgTunnel> {
         } else {
             AwgTunnelStatus::Down
         };
-        tunnels.push(AwgTunnel { name, config_path: path, iface, peers, status });
+        let autostart = autostart_name.as_deref() == Some(name.as_str());
+        tunnels.push(AwgTunnel { name, config_path: path, iface, peers, status, autostart });
     }
     tunnels.sort_by(|a, b| a.name.cmp(&b.name));
     tunnels

@@ -13,12 +13,13 @@ use crate::auth;
 use tinywifi_core::{
     add_custom_block, add_dns_record, add_static_lease, adblock_disable, adblock_enable,
     adblock_set_response, adblock_status, apply_wan, detect_monitor_adapter, disable_monitor,
-    discard_backup, enable_monitor, get_dns_settings, iface_traffic, import_tunnel,
+    discard_backup, enable_monitor, get_autostart, get_dns_settings, iface_traffic, import_tunnel,
     leases::LeasesReport, list_dns_records, list_static_leases, load_bypass_list, monitor_status,
     refresh_scan, remove_custom_block, remove_dns_record, remove_static_lease, revert,
-    save_bypass_list, scan_tunnels, service_restart, service_status, stage_dhcp, stage_wifi,
-    tunnel_down, tunnel_up, update_blocklist, update_dhcp, update_dns_settings, update_wifi,
-    wan_candidates, wan_status, AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig, DhcpSettings,
+    save_bypass_list, scan_tunnels, service_restart, service_status, set_autostart, stage_dhcp,
+    stage_wifi, tunnel_down, tunnel_up, update_blocklist, update_dhcp, update_dns_settings,
+    update_wifi, wan_candidates, wan_status, AutoRevert, AwgTunnel, AwgTunnelStatus, DhcpConfig,
+    DhcpSettings,
     DhcpUpdateError, DnsRecord, DnsRecordError, HostapdConf, MonitorState, NanoDnsSettings,
     StaticLease, StaticLeaseError, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError,
     WifiSettings, AWG_CONF_DIR,
@@ -304,6 +305,22 @@ fn find_tunnel<'a>(tunnels: &'a [AwgTunnel], name: &str) -> Result<&'a AwgTunnel
         .iter()
         .find(|t| t.name == name)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("tunnel '{name}' not found")))
+}
+
+pub async fn vpn_autostart_post(Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+    let tunnels = scan_tunnels(AWG_CONF_DIR);
+    find_tunnel(&tunnels, &name)?;
+    set_autostart(Some(&name))
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+pub async fn vpn_autostart_delete(Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
+    if get_autostart().as_deref() == Some(name.as_str()) {
+        set_autostart(None)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    }
+    Ok(ok())
 }
 
 // ── VPN bypass list ───────────────────────────────────────────────────────────

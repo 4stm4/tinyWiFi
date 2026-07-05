@@ -24,10 +24,10 @@ pub mod monitor;
 pub mod wifi;
 
 pub use amnezia::{
-    awg_binary, import_tunnel, load_bypass_list, parse_awg_show, parse_conf as parse_awg_conf,
-    save_bypass_list, scan_tunnels, strip_to_wg_conf, tunnel_down, tunnel_up, AwgInterface,
-    AwgPeer, AwgShowIface, AwgTunnel, AwgTunnelStatus, ImportError, AWG_CONF_DIR,
-    VPN_BYPASS_PATH,
+    awg_binary, get_autostart, import_tunnel, load_bypass_list, parse_awg_show,
+    parse_conf as parse_awg_conf, save_bypass_list, scan_tunnels, set_autostart, strip_to_wg_conf,
+    tunnel_down, tunnel_up, AwgInterface, AwgPeer, AwgShowIface, AwgTunnel, AwgTunnelStatus,
+    ImportError, AWG_CONF_DIR, VPN_AUTOSTART_PATH, VPN_BYPASS_PATH,
 };
 pub use config::{ConfigError, TinywifiConfig};
 pub use hostapd::{HostapdConf, WifiConfig};

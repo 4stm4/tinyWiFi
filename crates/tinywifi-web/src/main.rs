@@ -22,6 +22,7 @@ use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::Router;
 use tinywifi_core::config::{self, TinywifiConfig};
+use tinywifi_core::{get_autostart, scan_tunnels, tunnel_up, AWG_CONF_DIR};
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
@@ -122,6 +123,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/vpn", get(api::vpn_list).post(api::vpn_import))
         .route("/api/vpn/:name/up", post(api::vpn_up))
         .route("/api/vpn/:name/down", post(api::vpn_down))
+        .route("/api/vpn/:name/autostart", post(api::vpn_autostart_post).delete(api::vpn_autostart_delete))
         .route("/api/vpn/bypass", get(api::vpn_bypass_get).post(api::vpn_bypass_post))
         .route("/api/status", get(api::status))
         .route("/api/traffic", get(api::traffic))
@@ -205,6 +207,19 @@ async fn redirect_to_https(State(https_port): State<u16>, headers: axum::http::H
     Redirect::permanent(&format!("https://{host}:{https_port}{path}"))
 }
 
+fn autostart_vpn() {
+    let Some(name) = get_autostart() else { return };
+    let tunnels = scan_tunnels(AWG_CONF_DIR);
+    let Some(tunnel) = tunnels.iter().find(|t| t.name == name) else {
+        tracing::warn!("vpn autostart: tunnel '{name}' not found in {AWG_CONF_DIR}");
+        return;
+    };
+    match tunnel_up(tunnel) {
+        Ok(()) => tracing::info!("vpn autostart: tunnel '{name}' is up"),
+        Err(e) => tracing::warn!("vpn autostart: failed to bring up '{name}': {e}"),
+    }
+}
+
 /// Reads `RUST_LOG` (standard `tracing` convention); defaults to `info` so
 /// admin actions and request audit logs show up without extra config.
 fn init_logging() {
@@ -257,6 +272,8 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    autostart_vpn();
 
     let app = build_router(AppState::new(config));
     let redirect_app = Router::new()
