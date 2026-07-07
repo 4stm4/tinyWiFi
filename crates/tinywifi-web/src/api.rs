@@ -24,6 +24,7 @@ use tinywifi_core::{
     StaticLease, StaticLeaseError, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError,
     WifiSettings, AWG_CONF_DIR,
 };
+use tinywifi_core::{apply_schedule, inet_block, inet_unblock, is_inet_blocked, Schedule};
 
 use crate::state::AppState;
 
@@ -715,5 +716,37 @@ pub async fn adblock_custom_remove(
 ) -> Result<Json<Value>, ApiError> {
     remove_custom_block(&body.domain)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+// ── Internet schedule ─────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct ScheduleGetResponse {
+    pub schedule: Schedule,
+    pub blocked: bool,
+}
+
+pub async fn schedule_get() -> Json<ScheduleGetResponse> {
+    Json(ScheduleGetResponse {
+        schedule: Schedule::load(),
+        blocked: is_inet_blocked(),
+    })
+}
+
+pub async fn schedule_post(Json(body): Json<Schedule>) -> Result<Json<Value>, ApiError> {
+    body.save().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    apply_schedule(&body)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+pub async fn schedule_block_post() -> Result<Json<Value>, ApiError> {
+    inet_block().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(ok())
+}
+
+pub async fn schedule_unblock_post() -> Result<Json<Value>, ApiError> {
+    inet_unblock().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(ok())
 }

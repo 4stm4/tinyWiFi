@@ -22,7 +22,7 @@ use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::Router;
 use tinywifi_core::config::{self, TinywifiConfig};
-use tinywifi_core::{get_autostart, scan_tunnels, tunnel_up, AWG_CONF_DIR};
+use tinywifi_core::{apply_schedule, get_autostart, scan_tunnels, tunnel_up, Schedule, AWG_CONF_DIR};
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
@@ -120,6 +120,10 @@ fn build_router(state: AppState) -> Router {
         .route("/wan", get(pages::wan))
         .route("/api/wan", get(api::wan_get).post(api::wan_post))
         .route("/vpn", get(pages::vpn))
+        .route("/schedule", get(pages::schedule))
+        .route("/api/schedule", get(api::schedule_get).post(api::schedule_post))
+        .route("/api/schedule/block", post(api::schedule_block_post))
+        .route("/api/schedule/unblock", post(api::schedule_unblock_post))
         .route("/api/vpn", get(api::vpn_list).post(api::vpn_import))
         .route("/api/vpn/:name/up", post(api::vpn_up))
         .route("/api/vpn/:name/down", post(api::vpn_down))
@@ -275,6 +279,25 @@ async fn main() -> ExitCode {
     };
 
     autostart_vpn();
+
+    // Apply schedule immediately, then re-check every minute.
+    {
+        let sched = Schedule::load();
+        if let Err(e) = apply_schedule(&sched) {
+            tracing::warn!("schedule apply on startup: {e}");
+        }
+    }
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await; // skip first immediate tick
+        loop {
+            interval.tick().await;
+            let sched = Schedule::load();
+            if let Err(e) = apply_schedule(&sched) {
+                tracing::warn!("schedule apply: {e}");
+            }
+        }
+    });
 
     let app = build_router(AppState::new(config));
     let redirect_app = Router::new()

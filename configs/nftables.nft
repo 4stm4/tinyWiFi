@@ -18,8 +18,14 @@ table inet filter {
         ct state invalid drop
     }
 
+    # Managed by tinywifi-web schedule: empty = internet on, "drop" = blocked.
+    chain schedule {}
+
     chain forward {
         type filter hook forward priority filter; policy accept;
+
+        # Schedule gate: apply before rate limits so block is instant.
+        ip saddr 192.168.44.0/24 jump schedule
 
         # Per-client new-connection rate limit.
         # Blocks port scans and SYN floods from WiFi clients.

@@ -9,10 +9,10 @@ use tinywifi_core::leases::{LeaseStatus, LeasesReport};
 use tinywifi_core::{AclMode, AclState};
 use tinywifi_core::metrics;
 use tinywifi_core::{
-    adblock_status, get_dns_settings, hostname, interface_ipv4, kernel_version,
+    adblock_status, get_dns_settings, hostname, interface_ipv4, is_inet_blocked, kernel_version,
     list_dns_records, list_static_leases, monitor_status, ntp_servers, scan_tunnels,
     service_status, wan_candidates, wan_status, AwgTunnelStatus, DhcpConfig, HostapdConf,
-    IfaceState, MonitorState, ServiceStatus, SystemStatus, WanConfig, WanMode, AWG_CONF_DIR,
+    IfaceState, MonitorState, Schedule, ServiceStatus, SystemStatus, WanConfig, WanMode, AWG_CONF_DIR,
 };
 
 use crate::auth;
@@ -108,6 +108,7 @@ const NAV_I18N: &[(&str, &str, &str)] = &[
     ("/leases",    "Клиенты", "Clients"),
     ("/wan",       "WAN",     "WAN"),
     ("/vpn",       "VPN",     "VPN"),
+    ("/schedule",  "График",  "Schedule"),
     ("/monitor",   "Радар",   "Radar"),
     ("/adblock",   "AdBlock", "AdBlock"),
     ("/system",    "Система", "System"),
@@ -1680,5 +1681,160 @@ async function abAdd(){\n\
       out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);\n\
     }\n\
   }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
+}\n\
+</script>\n";
+
+// ── Schedule page ─────────────────────────────────────────────────────────────
+
+pub async fn schedule(_st: State<AppState>) -> Html<String> {
+    let sched = Schedule::load();
+    let blocked = is_inet_blocked();
+
+    let status_color = if blocked { "var(--status-err,#c0392b)" } else { "var(--status-ok)" };
+    let status_text_ru = if blocked { "Заблокирован" } else { "Работает" };
+    let status_text_en = if blocked { "Blocked" } else { "Active" };
+
+    let enabled_checked = if sched.enabled { "checked" } else { "" };
+
+    const DAYS_RU: &[&str] = &["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
+    const DAYS_EN: &[&str] = &["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+    let mut body = String::new();
+
+    // Status banner
+    body.push_str(&format!(
+        "<section class=\"card\"><div class=\"card__body\">\n\
+         <div style=\"display:flex;align-items:center;gap:1rem;margin-bottom:1rem\">\
+         <span style=\"width:12px;height:12px;border-radius:50%;background:{status_color};flex-shrink:0\"></span>\
+         <span style=\"font-size:1.1rem;font-weight:600\">\
+         <span class=\"t-ru\">Интернет: {status_text_ru}</span>\
+         <span class=\"t-en\">Internet: {status_text_en}</span></span>\
+         <button class=\"btn btn--sm {blk_class}\" onclick=\"inetToggle({is_blocked})\" id=\"inet-toggle-btn\">\
+         <span class=\"t-ru\">{blk_label_ru}</span><span class=\"t-en\">{blk_label_en}</span></button>\
+         </div>\n",
+        status_color = status_color,
+        status_text_ru = status_text_ru,
+        status_text_en = status_text_en,
+        blk_class = if blocked { "btn--primary" } else { "btn--ghost" },
+        is_blocked = if blocked { "true" } else { "false" },
+        blk_label_ru = if blocked { "Включить сейчас" } else { "Выключить сейчас" },
+        blk_label_en = if blocked { "Enable now" } else { "Disable now" },
+    ));
+
+    // Master toggle
+    body.push_str(&format!(
+        "<label style=\"display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-bottom:1.2rem\">\
+         <input type=\"checkbox\" id=\"sched-enabled\" {enabled_checked} onchange=\"schedSave()\">\
+         <span class=\"t-ru\">Расписание активно</span><span class=\"t-en\">Schedule enabled</span>\
+         </label>\n"
+    ));
+
+    // Weekly grid
+    body.push_str("<div style=\"overflow-x:auto\">\
+        <table style=\"width:100%;border-collapse:collapse;min-width:480px\">\
+        <thead><tr>\
+        <th style=\"text-align:left;padding:.4rem .5rem;font-size:.8rem\"></th>");
+
+    for i in 0..7 {
+        body.push_str(&format!(
+            "<th style=\"text-align:center;padding:.3rem .4rem;font-size:.85rem\">\
+             <span class=\"t-ru\">{ru}</span><span class=\"t-en\">{en}</span></th>",
+            ru = DAYS_RU[i], en = DAYS_EN[i]
+        ));
+    }
+    body.push_str("</tr></thead><tbody>\n");
+
+    // Row: Active checkboxes
+    body.push_str("<tr><td style=\"padding:.4rem .5rem;font-size:.8rem;color:var(--text-muted)\">\
+        <span class=\"t-ru\">Ограничить</span><span class=\"t-en\">Restrict</span></td>");
+    for i in 0..7 {
+        let chk = if sched.days[i].active { "checked" } else { "" };
+        body.push_str(&format!(
+            "<td style=\"text-align:center;padding:.3rem .4rem\">\
+             <input type=\"checkbox\" id=\"day{i}-active\" {chk} onchange=\"schedSave()\"></td>"
+        ));
+    }
+    body.push_str("</tr>\n");
+
+    // Row: From
+    body.push_str("<tr><td style=\"padding:.4rem .5rem;font-size:.8rem;color:var(--text-muted)\">\
+        <span class=\"t-ru\">Вкл с</span><span class=\"t-en\">On from</span></td>");
+    for i in 0..7 {
+        body.push_str(&format!(
+            "<td style=\"padding:.3rem .2rem\">\
+             <input type=\"time\" id=\"day{i}-from\" value=\"{v}\" \
+             onchange=\"schedSave()\" \
+             style=\"width:100%;font-size:.8rem;background:var(--surface-1);color:var(--text);\
+             border:1px solid var(--border);border-radius:4px;padding:.2rem\">\
+             </td>",
+            v = escape(&sched.days[i].from)
+        ));
+    }
+    body.push_str("</tr>\n");
+
+    // Row: To
+    body.push_str("<tr><td style=\"padding:.4rem .5rem;font-size:.8rem;color:var(--text-muted)\">\
+        <span class=\"t-ru\">Выкл в</span><span class=\"t-en\">Off at</span></td>");
+    for i in 0..7 {
+        body.push_str(&format!(
+            "<td style=\"padding:.3rem .2rem\">\
+             <input type=\"time\" id=\"day{i}-to\" value=\"{v}\" \
+             onchange=\"schedSave()\" \
+             style=\"width:100%;font-size:.8rem;background:var(--surface-1);color:var(--text);\
+             border:1px solid var(--border);border-radius:4px;padding:.2rem\">\
+             </td>",
+            v = escape(&sched.days[i].to)
+        ));
+    }
+    body.push_str("</tr>\n</tbody></table></div>\n");
+
+    body.push_str("<p style=\"margin:.75rem 0 0;font-size:.8rem;color:var(--text-muted)\">\
+        <span class=\"t-ru\">Интернет включён в окне «Вкл с» → «Выкл в». Вне окна — заблокирован. \
+        Ночной режим: если «Выкл» раньше «Вкл» — окно переходит через полночь.</span>\
+        <span class=\"t-en\">Internet is on during On→Off window. Outside it is blocked. \
+        Overnight: if Off &lt; On the window wraps midnight.</span></p>\n");
+
+    body.push_str("<p id=\"sched-result\" role=\"status\" class=\"note\" style=\"margin-top:.5rem\"></p>\n");
+    body.push_str("</div></section>\n");
+
+    body.push_str(SCHEDULE_SCRIPT);
+    layout("График", "Schedule", "/schedule", &body)
+}
+
+const SCHEDULE_SCRIPT: &str = "\
+<script>\n\
+function schedBuild(){\n\
+  var days=[];\n\
+  for(var i=0;i<7;i++){\n\
+    days.push({\n\
+      active:document.getElementById('day'+i+'-active').checked,\n\
+      from:document.getElementById('day'+i+'-from').value||'07:00',\n\
+      to:document.getElementById('day'+i+'-to').value||'22:00'\n\
+    });\n\
+  }\n\
+  return{enabled:document.getElementById('sched-enabled').checked,days:days};\n\
+}\n\
+async function schedSave(){\n\
+  var out=document.getElementById('sched-result');\n\
+  out.style.color='';out.textContent=t('Сохранение…','Saving…');\n\
+  try{\n\
+    var r=await fetch('/api/schedule',{method:'POST',\n\
+      headers:{'Content-Type':'application/json'},\n\
+      body:JSON.stringify(schedBuild())});\n\
+    var j={};try{j=await r.json();}catch(e){}\n\
+    if(r.ok){out.style.color='green';out.textContent=t('Сохранено ✓','Saved ✓');\n\
+      setTimeout(function(){location.reload();},800);}\n\
+    else{out.style.color='red';out.textContent=t('Ошибка: ','Error: ')+(j.error||r.statusText);}\n\
+  }catch(e){out.style.color='red';out.textContent=t('Сбой: ','Failure: ')+e;}\n\
+}\n\
+async function inetToggle(isBlocked){\n\
+  var btn=document.getElementById('inet-toggle-btn');\n\
+  btn.disabled=true;\n\
+  var url=isBlocked?'/api/schedule/unblock':'/api/schedule/block';\n\
+  try{\n\
+    var r=await fetch(url,{method:'POST'});\n\
+    if(r.ok){setTimeout(function(){location.reload();},400);}\n\
+    else{var j={};try{j=await r.json();}catch(e){}alert(j.error||r.statusText);btn.disabled=false;}\n\
+  }catch(e){alert(e);btn.disabled=false;}\n\
 }\n\
 </script>\n";

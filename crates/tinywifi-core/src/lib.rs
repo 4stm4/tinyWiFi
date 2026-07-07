@@ -21,6 +21,7 @@ pub mod setup;
 pub mod status;
 pub mod acl;
 pub mod monitor;
+pub mod schedule;
 pub mod wifi;
 
 pub use amnezia::{
@@ -66,6 +67,10 @@ pub use adblock::{
 pub use setup::{
     clear_initial_password, generate_initial_password, read_initial_password,
     write_initial_password, INITIAL_PASSWORD_FILE,
+};
+pub use schedule::{
+    apply_schedule, inet_block, inet_unblock, is_inet_blocked, DayWindow, Schedule,
+    SCHEDULE_PATH,
 };
 
 /// Crate version, surfaced in the dashboard and on the display.
