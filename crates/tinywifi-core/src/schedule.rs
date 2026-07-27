@@ -75,9 +75,13 @@ impl Schedule {
     }
 
     /// Returns true if internet should be blocked right now.
+    /// If the local time can't be determined we fail open (never block),
+    /// so a broken clock can't cut LAN clients off from the internet.
     pub fn should_block_now(&self) -> bool {
-        let (weekday, hour, minute) = local_time();
-        self.should_block_at(weekday, hour, minute)
+        match local_time() {
+            Some((weekday, hour, minute)) => self.should_block_at(weekday, hour, minute),
+            None => false,
+        }
     }
 
     /// Pure decision: should internet be blocked at the given local time?
@@ -185,17 +189,21 @@ fn parse_hhmm(s: &str) -> Option<u32> {
     Some(h.trim().parse::<u32>().ok()? * 60 + m.trim().parse::<u32>().ok()?)
 }
 
-/// Returns (weekday 0=Mon…6=Sun, hour, minute) in local time.
-fn local_time() -> (u8, u32, u32) {
-    let Ok(out) = Command::new("date").args(["+%u %H %M"]).output() else {
-        return (0, 0, 0);
-    };
+/// Returns (weekday 0=Mon…6=Sun, hour, minute) in local time, or `None` if
+/// `date` can't be run or its output can't be parsed. `date` is used (rather
+/// than a Rust time crate) because it honours the system timezone database,
+/// which a wall-clock schedule needs.
+fn local_time() -> Option<(u8, u32, u32)> {
+    let out = Command::new("date").args(["+%u %H %M"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut it = text.split_whitespace();
-    let wd = it.next().and_then(|s| s.parse::<u8>().ok()).unwrap_or(1).saturating_sub(1);
-    let h  = it.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let m  = it.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    (wd, h, m)
+    let wd = it.next()?.parse::<u8>().ok()?.checked_sub(1)?; // %u is 1..=7
+    let h  = it.next()?.parse::<u32>().ok()?;
+    let m  = it.next()?.parse::<u32>().ok()?;
+    Some((wd, h, m))
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
