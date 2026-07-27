@@ -76,8 +76,15 @@ impl Schedule {
 
     /// Returns true if internet should be blocked right now.
     pub fn should_block_now(&self) -> bool {
-        if !self.enabled { return false; }
         let (weekday, hour, minute) = local_time();
+        self.should_block_at(weekday, hour, minute)
+    }
+
+    /// Pure decision: should internet be blocked at the given local time?
+    /// `weekday` is 0=Mon…6=Sun. Kept side-effect-free so it can be tested
+    /// directly without a clock.
+    pub fn should_block_at(&self, weekday: u8, hour: u32, minute: u32) -> bool {
+        if !self.enabled { return false; }
         let window = &self.days[weekday as usize];
         if !window.active { return false; }
         let current = hour * 60 + minute;
@@ -208,59 +215,44 @@ mod tests {
         s
     }
 
-    fn mins_to_blocked(s: &Schedule, weekday: u8, h: u32, m: u32) -> bool {
-        if !s.enabled { return false; }
-        let window = &s.days[weekday as usize];
-        if !window.active { return false; }
-        let current = h * 60 + m;
-        let from = parse_hhmm(&window.from).unwrap_or(0);
-        let to   = parse_hhmm(&window.to).unwrap_or(1440);
-        if from == to { return true; }
-        if from < to {
-            !(from <= current && current < to)
-        } else {
-            to <= current && current < from
-        }
-    }
-
     #[test]
     fn disabled_never_blocks() {
         let s = Schedule::default(); // enabled=false
-        assert!(!mins_to_blocked(&s, 0, 23, 0));
+        assert!(!s.should_block_at(0, 23, 0));
     }
 
     #[test]
     fn inactive_day_never_blocks() {
         let s = sched_with_day(0, window(false, "07:00", "22:00"));
-        assert!(!mins_to_blocked(&s, 0, 3, 0));
+        assert!(!s.should_block_at(0, 3, 0));
     }
 
     #[test]
     fn normal_window_blocks_outside() {
         let s = sched_with_day(0, window(true, "07:00", "22:00"));
-        assert!(mins_to_blocked(&s, 0, 6, 59),  "before window");
-        assert!(!mins_to_blocked(&s, 0, 7, 0),  "at start");
-        assert!(!mins_to_blocked(&s, 0, 14, 0), "midday");
-        assert!(!mins_to_blocked(&s, 0, 21, 59),"before end");
-        assert!(mins_to_blocked(&s, 0, 22, 0),  "at end");
-        assert!(mins_to_blocked(&s, 0, 23, 30), "after end");
+        assert!(s.should_block_at(0, 6, 59),  "before window");
+        assert!(!s.should_block_at(0, 7, 0),  "at start");
+        assert!(!s.should_block_at(0, 14, 0), "midday");
+        assert!(!s.should_block_at(0, 21, 59),"before end");
+        assert!(s.should_block_at(0, 22, 0),  "at end");
+        assert!(s.should_block_at(0, 23, 30), "after end");
     }
 
     #[test]
     fn overnight_window() {
         // ON from 22:00 to 06:00 next day
         let s = sched_with_day(0, window(true, "22:00", "06:00"));
-        assert!(!mins_to_blocked(&s, 0, 22, 0), "at start overnight");
-        assert!(!mins_to_blocked(&s, 0, 0, 0),  "midnight");
-        assert!(!mins_to_blocked(&s, 0, 5, 59), "before end overnight");
-        assert!(mins_to_blocked(&s, 0, 6, 0),   "at end overnight");
-        assert!(mins_to_blocked(&s, 0, 14, 0),  "midday blocked");
+        assert!(!s.should_block_at(0, 22, 0), "at start overnight");
+        assert!(!s.should_block_at(0, 0, 0),  "midnight");
+        assert!(!s.should_block_at(0, 5, 59), "before end overnight");
+        assert!(s.should_block_at(0, 6, 0),   "at end overnight");
+        assert!(s.should_block_at(0, 14, 0),  "midday blocked");
     }
 
     #[test]
     fn whole_day_blocked() {
         let s = sched_with_day(0, window(true, "00:00", "00:00"));
-        assert!(mins_to_blocked(&s, 0, 0, 0));
-        assert!(mins_to_blocked(&s, 0, 12, 0));
+        assert!(s.should_block_at(0, 0, 0));
+        assert!(s.should_block_at(0, 12, 0));
     }
 }
