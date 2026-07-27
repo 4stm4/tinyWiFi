@@ -24,7 +24,10 @@ use tinywifi_core::{
     StaticLease, StaticLeaseError, SystemStatus, WanConfig, WanStatus, WifiConfig, WifiError,
     WifiSettings, AWG_CONF_DIR,
 };
-use tinywifi_core::{apply_schedule, inet_block, inet_unblock, is_inet_blocked, Schedule};
+use tinywifi_core::{
+    apply_schedule, clear_override, inet_block, inet_unblock, is_inet_blocked, set_override,
+    Schedule,
+};
 
 use crate::state::AppState;
 
@@ -736,17 +739,21 @@ pub async fn schedule_get() -> Json<ScheduleGetResponse> {
 
 pub async fn schedule_post(Json(body): Json<Schedule>) -> Result<Json<Value>, ApiError> {
     body.save().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    // Editing the schedule is an explicit request to follow it.
+    clear_override();
     apply_schedule(&body)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(ok())
 }
 
 pub async fn schedule_block_post() -> Result<Json<Value>, ApiError> {
+    set_override(true).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     inet_block().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(ok())
 }
 
 pub async fn schedule_unblock_post() -> Result<Json<Value>, ApiError> {
+    set_override(false).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     inet_unblock().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(ok())
 }

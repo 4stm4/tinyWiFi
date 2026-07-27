@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 
 pub const SCHEDULE_PATH: &str = "/etc/tinywifi/schedule.json";
 
+/// Manual override marker ("1" = force block, "0" = force unblock).
+/// Lives in /tmp so a reboot returns control to the schedule.
+const SCHEDULE_OVERRIDE_PATH: &str = "/tmp/tinywifi_schedule_override";
+
 /// One day's allowed window. `from` and `to` are "HH:MM" strings.
 /// Internet is ON inside [from, to); blocked outside.
 /// If `from == to` the whole day is blocked (active=true with zero-length window).
@@ -119,10 +123,41 @@ pub fn inet_unblock() -> Result<(), String> {
     nft(&["flush", "chain", "inet", "filter", "schedule"])
 }
 
+// ── manual override ───────────────────────────────────────────────────────────
+
+/// Force block/unblock regardless of the schedule. The override holds until
+/// the schedule itself wants the same state (a window boundary is crossed),
+/// the schedule is saved, or the device reboots.
+pub fn set_override(block: bool) -> Result<(), String> {
+    std::fs::write(SCHEDULE_OVERRIDE_PATH, if block { "1" } else { "0" })
+        .map_err(|e| format!("write {SCHEDULE_OVERRIDE_PATH}: {e}"))
+}
+
+/// Current manual override, if any.
+pub fn get_override() -> Option<bool> {
+    match std::fs::read_to_string(SCHEDULE_OVERRIDE_PATH).ok()?.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Drop the manual override; the schedule takes over on the next apply.
+pub fn clear_override() {
+    let _ = std::fs::remove_file(SCHEDULE_OVERRIDE_PATH);
+}
+
 /// Apply or remove the block based on the current schedule state.
+/// A manual override wins until the schedule agrees with it — then it is
+/// consumed, so the next window boundary switches state as scheduled.
 /// Returns true if the nft state changed.
 pub fn apply_schedule(schedule: &Schedule) -> Result<bool, String> {
-    let want_block = schedule.should_block_now();
+    let want_sched = schedule.should_block_now();
+    let want_block = match get_override() {
+        Some(ov) if ov == want_sched => { clear_override(); want_sched }
+        Some(ov) => ov,
+        None => want_sched,
+    };
     let is_blocked = is_inet_blocked();
     if want_block == is_blocked { return Ok(false); }
     if want_block { inet_block()?; } else { inet_unblock()?; }
