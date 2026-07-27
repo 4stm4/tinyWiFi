@@ -467,7 +467,7 @@ pub fn delete_tunnel(name: &str, dir: impl AsRef<Path>) -> Result<(), String> {
     }
     // Clear autostart if this was the autostart tunnel
     if get_autostart().as_deref() == Some(name) {
-        let _ = set_autostart(None);
+        set_autostart(None)?;
     }
     Ok(())
 }
@@ -487,11 +487,13 @@ pub fn set_autostart(name: Option<&str>) -> Result<(), String> {
             std::fs::write(VPN_AUTOSTART_PATH, format!("{n}\n"))
                 .map_err(|e| format!("write {VPN_AUTOSTART_PATH}: {e}"))
         }
-        None => {
-            match std::fs::remove_file(VPN_AUTOSTART_PATH) {
-                Ok(()) | Err(_) => Ok(()),
-            }
-        }
+        None => match std::fs::remove_file(VPN_AUTOSTART_PATH) {
+            Ok(()) => Ok(()),
+            // Already gone → nothing to do. Any other error (e.g. permission
+            // denied) must surface, otherwise autostart silently stays on.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("remove {VPN_AUTOSTART_PATH}: {e}")),
+        },
     }
 }
 
