@@ -23,7 +23,7 @@ const SCHEDULE_OVERRIDE_PATH: &str = "/tmp/tinywifi_schedule_override";
 /// Internet is ON inside [from, to); blocked outside.
 /// If `from == to` the whole day is blocked (active=true with zero-length window).
 /// Overnight window is supported: `from > to` means ON spans midnight.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DayWindow {
     /// Whether this day's restriction is active. If false: internet always on.
     #[serde(default)]
@@ -38,6 +38,14 @@ pub struct DayWindow {
 
 fn default_from() -> String { "07:00".into() }
 fn default_to()   -> String { "22:00".into() }
+
+impl Default for DayWindow {
+    /// Matches the serde field defaults so a `Schedule::default()` built in
+    /// code carries the same valid "HH:MM" times as one loaded from JSON.
+    fn default() -> Self {
+        Self { active: false, from: default_from(), to: default_to() }
+    }
+}
 
 /// Weekly schedule. Index 0=Mon … 6=Sun.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +72,19 @@ impl Schedule {
             return Self::default();
         };
         serde_json::from_str(&text).unwrap_or_default()
+    }
+
+    /// Validate every day's `from`/`to` as real "HH:MM" times (00:00–23:59).
+    /// Returns the offending value on the first bad field.
+    pub fn validate(&self) -> Result<(), String> {
+        for (i, d) in self.days.iter().enumerate() {
+            for (label, v) in [("from", &d.from), ("to", &d.to)] {
+                if !is_valid_hhmm(v) {
+                    return Err(format!("day {i} {label}: invalid time \"{v}\" (expected HH:MM)"));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -186,7 +207,17 @@ fn nft(args: &[&str]) -> Result<(), String> {
 
 fn parse_hhmm(s: &str) -> Option<u32> {
     let (h, m) = s.split_once(':')?;
-    Some(h.trim().parse::<u32>().ok()? * 60 + m.trim().parse::<u32>().ok()?)
+    let h = h.trim().parse::<u32>().ok()?;
+    let m = m.trim().parse::<u32>().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(h * 60 + m)
+}
+
+/// True if `s` is a well-formed "HH:MM" in range 00:00–23:59.
+fn is_valid_hhmm(s: &str) -> bool {
+    parse_hhmm(s).is_some()
 }
 
 /// Returns (weekday 0=Mon…6=Sun, hour, minute) in local time, or `None` if
@@ -262,5 +293,25 @@ mod tests {
         let s = sched_with_day(0, window(true, "00:00", "00:00"));
         assert!(s.should_block_at(0, 0, 0));
         assert!(s.should_block_at(0, 12, 0));
+    }
+
+    #[test]
+    fn validate_accepts_edges() {
+        let s = sched_with_day(3, window(true, "00:00", "23:59"));
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range() {
+        let s = sched_with_day(0, window(true, "25:99", "22:00"));
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_garbage() {
+        for bad in ["", "7", "7:00:00", "aa:bb", "07-00"] {
+            let s = sched_with_day(0, window(true, bad, "22:00"));
+            assert!(s.validate().is_err(), "{bad:?} should be rejected");
+        }
     }
 }

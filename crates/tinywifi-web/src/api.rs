@@ -738,6 +738,8 @@ pub async fn schedule_get() -> Json<ScheduleGetResponse> {
 }
 
 pub async fn schedule_post(Json(body): Json<Schedule>) -> Result<Json<Value>, ApiError> {
+    body.validate()
+        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e))?;
     body.save().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     // Editing the schedule is an explicit request to follow it.
     clear_override();
