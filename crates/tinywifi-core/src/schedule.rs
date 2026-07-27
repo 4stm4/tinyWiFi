@@ -131,6 +131,18 @@ impl Schedule {
 
 // ── nftables enforcement ──────────────────────────────────────────────────────
 
+/// True if the `schedule` chain exists in `inet filter`. Enforcement is a
+/// no-op without it (and without a `jump schedule` from `forward`), so this
+/// lets startup surface a stale nftables config loudly instead of failing
+/// silently once a minute.
+pub fn schedule_chain_present() -> bool {
+    Command::new("nft")
+        .args(["list", "chain", "inet", "filter", "schedule"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Returns true if internet is currently blocked by the schedule chain.
 pub fn is_inet_blocked() -> bool {
     let Ok(out) = Command::new("nft")

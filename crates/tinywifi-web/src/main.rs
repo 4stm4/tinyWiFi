@@ -284,6 +284,12 @@ async fn main() -> ExitCode {
     tokio::task::spawn_blocking(autostart_vpn);
 
     // Apply schedule immediately, then re-check every minute.
+    if !tinywifi_core::schedule_chain_present() {
+        tracing::error!(
+            "nftables 'schedule' chain missing from inet filter — internet \
+             scheduling will not work; deploy the current configs/nftables.nft"
+        );
+    }
     {
         let sched = Schedule::load();
         if let Err(e) = apply_schedule(&sched) {

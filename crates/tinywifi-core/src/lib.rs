@@ -70,7 +70,7 @@ pub use setup::{
 };
 pub use schedule::{
     apply_schedule, clear_override, get_override, inet_block, inet_unblock, is_inet_blocked,
-    set_override, DayWindow, Schedule, SCHEDULE_PATH,
+    schedule_chain_present, set_override, DayWindow, Schedule, SCHEDULE_PATH,
 };
 
 /// Crate version, surfaced in the dashboard and on the display.
