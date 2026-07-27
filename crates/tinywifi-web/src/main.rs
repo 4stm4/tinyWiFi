@@ -278,7 +278,10 @@ async fn main() -> ExitCode {
         }
     };
 
-    autostart_vpn();
+    // Bring up the autostart tunnel off the async runtime: `awg-quick up` can
+    // block for seconds on an unreachable endpoint, and we don't want that to
+    // delay the web server binding.
+    tokio::task::spawn_blocking(autostart_vpn);
 
     // Apply schedule immediately, then re-check every minute.
     {
