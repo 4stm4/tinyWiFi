@@ -4,9 +4,10 @@
 
 [web]
 # HTTPS (self-signed cert generated on first boot into /etc/tinywifi/tls/).
-listen = "0.0.0.0:8443"
+# Standard ports; tinywifi-web runs as root and can bind 80/443.
+listen = "0.0.0.0:443"
 # Plain HTTP; redirects every request to https://.../
-http_redirect_listen = "0.0.0.0:8080"
+http_redirect_listen = "0.0.0.0:80"
 
 [display]
 refresh_secs = 10
